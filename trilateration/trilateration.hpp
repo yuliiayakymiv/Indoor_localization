@@ -14,3 +14,4 @@ struct Anchor {
 namespace Trilateration {
     bool calculate_3d_position(const Anchor* anchors, int count, Point3D& result);
 }
+Point3D apply_kalman_filter(float raw_x, float raw_y, float raw_z);
