@@ -1,7 +1,7 @@
 #include <math.h>
 #include <stddef.h>
 #include "trilateration.hpp"
-
+#include "kalman.hpp"
 
 class Trilateration {
 public:
@@ -83,3 +83,25 @@ public:
         return true;
     }
 };
+
+static KalmanFilter1D kalmanX(0.01f, 0.25f);
+static KalmanFilter1D kalmanY(0.01f, 0.25f);
+static KalmanFilter1D kalmanZ(0.01f, 0.25f);
+static bool is_kalman_initialized = false;
+
+//function for processing and smoothing noisy coordinates
+Point3D apply_kalman_filter(float raw_x, float raw_y, float raw_z) {
+    if (!is_kalman_initialized) {
+        kalmanX.init(raw_x);
+        kalmanY.init(raw_y);
+        kalmanZ.init(raw_z);
+        is_kalman_initialized = true;
+    }
+
+    Point3D filtered_pos;
+    filtered_pos.x = kalmanX.update(raw_x);
+    filtered_pos.y = kalmanY.update(raw_y);
+    filtered_pos.z = kalmanZ.update(raw_z);
+
+    return filtered_pos;
+}
