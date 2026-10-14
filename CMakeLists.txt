@@ -7,8 +7,8 @@ project(indoor_localization)
 
 # --- Sources ---
 target_sources(app PRIVATE
-    src/main.cpp                      # Person 1: main loop
-    trilateration/trilateration.cpp   # Person 1: 3D position math
+    # src/main.cpp                    
+    trilateration/trilateration.cpp   # 3D position math
     mavlink/mavlink_packer.cpp        # Person 2: MAVLink packing
 )
 
