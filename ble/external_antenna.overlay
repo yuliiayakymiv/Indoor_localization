@@ -1,0 +1,5 @@
+/* XIAO nRF54L15: use the external IPEX/U.FL antenna instead of the onboard ceramic one.
+ * RF switch P2.05 physically HIGH = external antenna. */
+&rfsw_ctl {
+	/delete-property/ regulator-boot-on;
+};
