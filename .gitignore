@@ -1,0 +1,19 @@
+# Build output (west / nRF Connect)
+build/
+build_*/
+
+# Local tools (OpenOCD etc.)
+tools/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# PC test binaries
+test_mavlink
+test_mavlink.exe
+*.o
+*.exe
