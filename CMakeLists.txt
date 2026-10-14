@@ -5,11 +5,11 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(indoor_localization)
 
-# --- Sources ---
+# Source files
 target_sources(app PRIVATE
     # src/main.cpp                    
     trilateration/trilateration.cpp   # 3D position math
-    mavlink/mavlink_packer.cpp        # Person 2: MAVLink packing
+    mavlink/mavlink_packer.cpp        # MAVLink packing
 )
 
 # --- Include paths ---
