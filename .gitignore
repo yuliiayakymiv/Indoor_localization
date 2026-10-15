@@ -2,8 +2,10 @@
 build/
 build_*/
 
-# Local tools (OpenOCD etc.)
-tools/
+# Local tools (OpenOCD binaries, downloaded archives)
+tools/openocd/
+tools/xpack-openocd-*/
+tools/*.zip
 
 # Editor / OS
 .vscode/
