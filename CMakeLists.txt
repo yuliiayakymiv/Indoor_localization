@@ -17,7 +17,6 @@ target_include_directories(app PRIVATE
     trilateration
     mavlink
     lib/mavlink                       # c_library_v2 (git submodule, header-only)
-    lib/eigen
 )
 
 # MAVLink headers use packed structs; silence the noisy GCC warning
