@@ -1,0 +1,4 @@
+/*
+ * Intentionally empty: the stock NCS 3.4.2 reflector needs no XIAO-specific devicetree changes.
+ * The previous (NCS 3.1.0) overlay is kept in _backup_ncs3.1.0/boards/.
+ */
