@@ -78,4 +78,3 @@ moving the boards, same antenna orientation, away from walls/floor/bodies, then 
 - `src/main.c` - application
 - `prj.conf`, `Kconfig`, `Kconfig.sysbuild`, `sysbuild/` - stock Nordic configuration
 - `boards/` - stock overlays for Nordic boards (XIAO needs none)
-- `_backup_ncs3.1.0/` - previous NCS 3.1.0 versions of our files, kept for reference. Safe to delete.
