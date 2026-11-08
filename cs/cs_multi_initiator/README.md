@@ -1,8 +1,8 @@
 # cs_multi_initiator (Seeed XIAO nRF54L15, NCS 3.4.2)
 
-Mobile node of the indoor localization system (tasks **NRF-02** and **NRF-04**).
+Mobile node of the indoor localization system (tasks **NRF-02**, **NRF-04** + 2D position).
 Connects to several Channel Sounding beacons at once and measures the distance to them
-**one at a time** (round-robin), then prints one measurement line per beacon on the UART.
+**one at a time** (round-robin), then prints one measurement line per beacon and the computed X/Y on the UART.
 
 Based on `../cs_initiator` (Nordic `ras_initiator` sample + our calibration).
 Beacons run `../cs_reflector`, each built with its own id.
@@ -20,8 +20,22 @@ Beacons run `../cs_reflector`, each built with its own id.
    (calibration constants are the ones from `../cs_initiator`).
 4. The LED is on when all beacons are connected and set up.
 
-The latest distances are available in code through `il_get_distances()` for the
-trilateration step (see the `TODO` in `main()`).
+5. After every round: 2D position with Sofia's trilateration (`../../trilateration`,
+   `Trilateration::calculate_2d_position`, used as is through `src/trilat_bridge.cpp`).
+   The 3D CS distance is first reduced to the floor plane with the beacon/mobile heights.
+
+## Beacon coordinates
+At the top of `src/main.c`, array `beacon_pos_mm` ({x, y, z} in mm, row 1 = `IL_B1`).
+**The current values are temporary.** Put the real ones from SYS-04, rebuild and reflash
+only the mobile board. `MOBILE_Z_MM` = antenna height of the mobile board.
+
+## Position message (SYS-03)
+Once per round:
+
+    $POS,<seq>,<t_ms>,<x_mm>,<y_mm>,<z_mm>,<status>*<XX>
+
+`z_mm` is 0 for the 2D demo. `status`: `0` OK, `1` fewer than 3 fresh distances,
+`2` beacons on one line / calculation failed (then x, y are 0).
 
 ## Measurement message (NRF-02)
 One line per beacon per round, NMEA-style:

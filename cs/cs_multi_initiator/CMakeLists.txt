@@ -9,9 +9,12 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(channel_sound_ras_initiator)
 
-FILE(GLOB app_sources src/*.c)
+FILE(GLOB app_sources src/*.c src/*.cpp)
 # NORDIC SDK APP START
 target_sources(app PRIVATE
   ${app_sources}
+  # Sofia's trilateration (shared with the rest of the project, used as is)
+  ${CMAKE_CURRENT_LIST_DIR}/../../trilateration/trilateration.cpp
 )
+target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../trilateration)
 # NORDIC SDK APP END

@@ -20,8 +20,10 @@
  *   3. After every turn prints one measurement line on the UART (format: see README):
  *        $RNG,<seq>,<t_ms>,<beacon_id>,<dist_mm>,<status>*<XX>
  *
- *  The latest distance to every beacon is kept in beacons[] (see il_get_distances()),
- *  ready for the trilateration step.
+ *  4. After every round computes X/Y with 2D trilateration (../../trilateration, Sofia's
+ *     code) and prints:
+ *        $POS,<seq>,<t_ms>,<x_mm>,<y_mm>,<z_mm>,<status>*<XX>
+ *     Beacon coordinates: beacon_pos_mm[] below.
  */
 
 #include <math.h>
@@ -38,6 +40,8 @@
 #include <bluetooth/services/ras.h>
 #include <bluetooth/gatt_dm.h>
 #include <bluetooth/cs_de.h>
+
+#include "trilat_bridge.h"
 
 #include <dk_buttons_and_leds.h>
 
@@ -81,6 +85,22 @@ BUILD_ASSERT(MAX_AP == 1, "This application uses antenna path 0 only");
 #define DISTANCE_MAX_AGE_MS (3000)
 /* Timeout of each step of the per-beacon setup (security, discovery, CS config...) */
 #define SETUP_STEP_TIMEOUT_MS (5000)
+
+/* ---- Beacon coordinates (SYS-04) ---------------------------------------------------------
+ * Position of every beacon in the room coordinate system, in MILLIMETERS: {x, y, z}.
+ * Row 1 = beacon IL_B1, row 2 = IL_B2, ... Replace the TEMPORARY values below with the real
+ * ones from SYS-04, then rebuild and reflash only this (mobile) board.
+ * z = height of the beacon antenna above the floor.
+ */
+static const int32_t beacon_pos_mm[][3] = {
+	{    0,    0, 0 }, /* IL_B1  TEMPORARY */
+	{ 3000,    0, 0 }, /* IL_B2  TEMPORARY */
+	{    0, 3000, 0 }, /* IL_B3  TEMPORARY */
+	{ 3000, 3000, 0 }, /* IL_B4  TEMPORARY, used only with CONFIG_IL_NUM_BEACONS=4 */
+};
+
+/* Height of the mobile board antenna above the floor, mm (on the toy car). */
+#define MOBILE_Z_MM (0)
 
 /* ---- Distance calibration (copied from ../cs_initiator, see the comment there) ----
  * Actual_distance = (Raw_measurement - OFFSET) / SLOPE
@@ -131,6 +151,9 @@ struct beacon {
 };
 
 static struct beacon beacons[NUM_BEACONS];
+
+BUILD_ASSERT(ARRAY_SIZE(beacon_pos_mm) >= NUM_BEACONS,
+	     "Add coordinates for every beacon to beacon_pos_mm");
 
 /* Beacon being set up (connection phase) and beacon being ranged (CS phase).
  * Only one of each at a time, so the step buffers below can be shared.
@@ -1220,7 +1243,7 @@ static void print_measurement(const struct beacon *b)
  *                 DISTANCE_MAX_AGE_MS).
  * @return number of valid distances.
  */
-int il_get_distances(float dist_m[NUM_BEACONS], bool valid[NUM_BEACONS])
+static int il_get_distances(float dist_m[NUM_BEACONS], bool valid[NUM_BEACONS])
 {
 	uint32_t now = k_uptime_get_32();
 	int n = 0;
@@ -1234,6 +1257,71 @@ int il_get_distances(float dist_m[NUM_BEACONS], bool valid[NUM_BEACONS])
 		n += valid[i] ? 1 : 0;
 	}
 	return n;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Position: 2D trilateration (Sofia's code) + $POS message (SYS-03)          */
+/*   $POS,<seq>,<t_ms>,<x_mm>,<y_mm>,<z_mm>,<status>*<XX>\r\n                 */
+/* ------------------------------------------------------------------------- */
+
+enum il_pos_status {
+	IL_POS_OK = 0,              /* position computed */
+	IL_POS_TOO_FEW_BEACONS = 1, /* fewer than 3 fresh distances */
+	IL_POS_BAD_GEOMETRY = 2,    /* beacons on one line, or calculation failed */
+};
+
+static uint32_t pos_seq;
+
+static void compute_and_print_position(void)
+{
+	float dist_m[NUM_BEACONS];
+	bool valid[NUM_BEACONS];
+	float anchor_xy_m[NUM_BEACONS][2];
+	float horiz_m[NUM_BEACONS];
+	int n = 0;
+	float x_m = 0.0f, y_m = 0.0f;
+	enum il_pos_status status;
+
+	il_get_distances(dist_m, valid);
+
+	for (int i = 0; i < NUM_BEACONS; i++) {
+		if (!valid[i]) {
+			continue;
+		}
+
+		/* The CS distance is 3D; remove the height difference to get the distance
+		 * on the floor plane: d_floor = sqrt(d^2 - dz^2)
+		 */
+		float dz_m = (beacon_pos_mm[i][2] - MOBILE_Z_MM) / 1000.0f;
+		float d2 = dist_m[i] * dist_m[i] - dz_m * dz_m;
+
+		anchor_xy_m[n][0] = beacon_pos_mm[i][0] / 1000.0f;
+		anchor_xy_m[n][1] = beacon_pos_mm[i][1] / 1000.0f;
+		horiz_m[n] = d2 > 0.0f ? sqrtf(d2) : 0.0f;
+		n++;
+	}
+
+	if (n < 3) {
+		status = IL_POS_TOO_FEW_BEACONS;
+	} else if (il_trilaterate_2d(anchor_xy_m, horiz_m, n, &x_m, &y_m) &&
+		   isfinite(x_m) && isfinite(y_m)) {
+		status = IL_POS_OK;
+	} else {
+		status = IL_POS_BAD_GEOMETRY;
+	}
+
+	char body[64];
+	int32_t x_mm = 0, y_mm = 0;
+
+	if (status == IL_POS_OK) {
+		x_mm = (int32_t)lroundf(x_m * 1000.0f);
+		y_mm = (int32_t)lroundf(y_m * 1000.0f);
+	}
+
+	/* z is 0 for the 2D demo */
+	snprintk(body, sizeof(body), "POS,%u,%u,%d,%d,%d,%u", pos_seq++, k_uptime_get_32(), x_mm,
+		 y_mm, 0, (unsigned int)status);
+	printk("$%s*%02X\r\n", body, nmea_checksum(body));
 }
 
 int main(void)
@@ -1278,7 +1366,8 @@ int main(void)
 			print_measurement(b);
 		}
 
-		/* TODO (trilateration): call il_get_distances() here and compute X/Y. */
+		/* X/Y from the latest distances of all beacons */
+		compute_and_print_position();
 
 		/* Try to (re)connect a missing beacon, short scan so ranging is not blocked */
 		if (connected_count() < NUM_BEACONS) {
