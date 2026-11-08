@@ -30,10 +30,16 @@ static K_SEM_DEFINE(sem_config, 0, 1);
 
 static struct bt_conn *connection;
 
+/* Indoor localization: each beacon advertises "IL_B<id>" so the multi-beacon initiator
+ * (../cs_multi_initiator) knows which beacon it is talking to.
+ * Set the id per board at build time:  west build ... -- -DCONFIG_IL_BEACON_ID=2
+ */
+#define IL_BEACON_NAME "IL_B" STRINGIFY(CONFIG_IL_BEACON_ID)
+
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 	BT_DATA_BYTES(BT_DATA_UUID16_ALL, BT_UUID_16_ENCODE(BT_UUID_RANGING_SERVICE_VAL)),
-	BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME, sizeof(CONFIG_BT_DEVICE_NAME) - 1),
+	BT_DATA(BT_DATA_NAME_COMPLETE, IL_BEACON_NAME, sizeof(IL_BEACON_NAME) - 1),
 };
 
 static void connected_cb(struct bt_conn *conn, uint8_t err)
@@ -198,7 +204,7 @@ int main(void)
 {
 	int err;
 
-	LOG_INF("Starting Channel Sounding Reflector Sample");
+	LOG_INF("Starting Channel Sounding Reflector, beacon %s", IL_BEACON_NAME);
 
 	dk_leds_init();
 
