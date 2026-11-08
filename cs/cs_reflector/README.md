@@ -30,4 +30,3 @@ firmware at boot.
 
 ## Layout
 - `src/main.c`, `prj.conf`, `Kconfig.sysbuild`, `sysbuild/`, `boards/`, `android_ranging.conf` - stock Nordic files
-- `_backup_ncs3.1.0/` - our previous NCS 3.1.0 version (modified main.c, XIAO overlay, prj.conf). Safe to delete.
