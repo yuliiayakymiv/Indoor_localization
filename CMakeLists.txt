@@ -10,6 +10,7 @@ target_sources(app PRIVATE
     # src/main.cpp                    
     trilateration/trilateration.cpp   # 3D position math
     mavlink/mavlink_packer.cpp        # MAVLink packing
+    uart/uart_sender.cpp              # UART sending
 )
 
 # --- Include paths ---
@@ -17,6 +18,7 @@ target_include_directories(app PRIVATE
     trilateration
     mavlink
     lib/mavlink                       # c_library_v2 (git submodule, header-only)
+    uart
 )
 
 # MAVLink headers use packed structs; silence the noisy GCC warning
