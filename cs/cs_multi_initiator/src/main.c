@@ -185,6 +185,8 @@ static uint16_t m_n_iqs[CONFIG_BT_RAS_MAX_ANTENNA_PATHS][CS_DE_NUM_CHANNELS];
 static cs_de_report_t m_cs_de_report;
 
 static uint8_t setup_status; /* HCI status of the last setup callback */
+static uint8_t last_subevent_abort_reason;  /* for the "aborted" warning */
+static uint8_t last_procedure_abort_reason;
 static bool procedure_enabled_state;
 
 static struct beacon *beacon_by_conn(struct bt_conn *conn)
@@ -456,8 +458,9 @@ static void ranging_data_cb(struct bt_conn *conn, uint16_t ranging_counter, int 
 	}
 
 	if (latest_local_steps.len == 0) {
-		LOG_WRN("B%u: all subevents of ranging counter %u were aborted", b->id,
-			ranging_counter);
+		LOG_WRN("B%u: all subevents of ranging counter %u were aborted "
+			"(subevent reason 0x%x, procedure reason 0x%x)", b->id, ranging_counter,
+			last_subevent_abort_reason, last_procedure_abort_reason);
 		release_step_buffers();
 		return;
 	}
@@ -525,6 +528,8 @@ static void subevent_result_cb(struct bt_conn *conn, struct bt_conn_le_cs_subeve
 
 	if (result->header.subevent_done_status == BT_CONN_LE_CS_SUBEVENT_ABORTED) {
 		/* The steps from this subevent will not be used. */
+		last_subevent_abort_reason = result->header.subevent_abort_reason;
+		last_procedure_abort_reason = result->header.procedure_abort_reason;
 	} else if (result->step_data_buf) {
 		if (result->step_data_buf->len <= net_buf_simple_tailroom(&latest_local_steps)) {
 			uint16_t len = result->step_data_buf->len;
@@ -758,7 +763,13 @@ static void procedure_enable_cb(struct bt_conn *conn, uint8_t status,
 {
 	if (status == BT_HCI_ERR_SUCCESS) {
 		procedure_enabled_state = (params->state == 1);
-		LOG_DBG("CS procedures %s", procedure_enabled_state ? "enabled" : "disabled");
+		if (procedure_enabled_state) {
+			LOG_INF("CS on: subevent %u us x %u per event, event interval %u, "
+				"procedure interval %u, max len %u",
+				params->subevent_len, params->subevents_per_event,
+				params->event_interval, params->procedure_interval,
+				params->max_procedure_len);
+		}
 	} else {
 		LOG_WRN("CS procedures enable/disable failed. (HCI status 0x%02x)", status);
 	}
@@ -795,10 +806,19 @@ BT_CONN_CB_DEFINE(conn_cb) = {
 /* Scanning: find "IL_B<id>" beacons that are not connected yet               */
 /* ------------------------------------------------------------------------- */
 
-#define ACL_CONN_INTERVAL 0x10 /* 20 ms */
+/* Connection interval per beacon, in 1.25 ms units: 40, 45, 50, 55 ms for B1..B4.
+ * With the same interval on every link the ACL events keep a fixed offset, and the
+ * CS subevents of one link hit the ACL events of another every time (all subevents
+ * aborted, reason 0x3). Different intervals make the offset drift, so a conflict
+ * only happens now and then.
+ */
+#define ACL_CONN_INTERVAL_BASE 0x20 /* 40 ms */
+#define ACL_CONN_INTERVAL_STEP 4    /* +5 ms per beacon */
 
-static const struct bt_le_conn_param *conn_param =
-	BT_LE_CONN_PARAM(ACL_CONN_INTERVAL, ACL_CONN_INTERVAL, 0, BT_GAP_MS_TO_CONN_TIMEOUT(4000));
+static uint16_t acl_interval_for(const struct beacon *b)
+{
+	return ACL_CONN_INTERVAL_BASE + (b->id - 1) * ACL_CONN_INTERVAL_STEP;
+}
 
 static bool parse_name_cb(struct bt_data *data, void *user_data)
 {
@@ -859,7 +879,11 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 	LOG_INF("Found beacon B%u (RSSI %d), connecting...", id, rssi);
 
 	connecting_beacon = b;
-	err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN, conn_param, &b->conn);
+	const uint16_t interval = acl_interval_for(b);
+	const struct bt_le_conn_param conn_param =
+		BT_LE_CONN_PARAM_INIT(interval, interval, 0, BT_GAP_MS_TO_CONN_TIMEOUT(4000));
+
+	err = bt_conn_le_create(addr, BT_CONN_LE_CREATE_CONN, &conn_param, &b->conn);
 	if (err) {
 		LOG_WRN("B%u: create connection failed (err %d)", id, err);
 		connecting_beacon = NULL;
@@ -962,7 +986,7 @@ static int setup_beacon_cs(struct beacon *b)
 	SETUP_WAIT(sem_cs_security_enabled, "CS security");
 
 	/* scale factor of conn_interval units to proc_interval units is 1.25/0.625 = 2 */
-	const uint16_t acl_interval_in_proc_interval_units = ACL_CONN_INTERVAL * 2;
+	const uint16_t acl_interval_in_proc_interval_units = acl_interval_for(b) * 2;
 	const uint16_t desired_procedure_interval = realtime_rd ? 5 : 10;
 	const uint16_t desired_max_procedure_length =
 		acl_interval_in_proc_interval_units * (desired_procedure_interval - 1);
@@ -973,8 +997,12 @@ static int setup_beacon_cs(struct beacon *b)
 		.min_procedure_interval = desired_procedure_interval,
 		.max_procedure_interval = desired_procedure_interval,
 		.max_procedure_count = 0, /* run until we disable it at the end of the turn */
-		.min_subevent_len = 16000,
-		.max_subevent_len = 16000,
+		/* Short subevents (6 ms instead of 16 ms): with several beacon links a long
+		 * subevent always overlapped the ACL events of another link and was aborted
+		 * (subevent abort reason 0x3, scheduling conflict). Short ones fit in between.
+		 */
+		.min_subevent_len = 6000,
+		.max_subevent_len = 6000,
 		.tone_antenna_config_selection = BT_LE_CS_TONE_ANTENNA_CONFIGURATION_A1_B1,
 		.phy = BT_LE_CS_PROCEDURE_PHY_2M,
 		.tx_power_delta = 0x80,

@@ -75,4 +75,15 @@ Same as `../cs_initiator`: use pyOCD (`.\flash.ps1 -List`, then `.\flash.ps1 -Pr
 not `west flash`.
 
 ## Status
-Compiles on NCS 3.4.2 for `xiao_nrf54l15/nrf54l15/cpuapp`. **Not yet tested on hardware.**
+Compiles on NCS 3.4.2 for `xiao_nrf54l15/nrf54l15/cpuapp`.
+Tested on hardware with 2 beacons (B1, B2): both give distances every round.
+Not yet tested with 3 beacons / `$POS` status 0.
+
+Multi-link scheduling notes (all subevents aborted, subevent abort reason `0x3`):
+- each beacon gets its own connection interval (40/45/50/55 ms for B1..B4), so the
+  ACL events of the links drift against each other instead of always colliding with
+  the CS subevents of the active beacon;
+- CS subevent length 6 ms, `CONFIG_BT_CTLR_SDC_CENTRAL_ACL_EVENT_SPACING_DEFAULT=13000`.
+
+If one beacon is never found again after the mobile node restarts, check its power
+supply (a power bank may switch off at the low current of the board).
