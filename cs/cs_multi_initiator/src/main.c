@@ -23,7 +23,11 @@
  *  4. After every round computes X/Y with 2D trilateration (../../trilateration, Sofia's
  *     code) and prints:
  *        $POS,<seq>,<t_ms>,<x_mm>,<y_mm>,<z_mm>,<status>*<XX>
- *     Beacon coordinates: beacon_pos_mm[] below.
+ *     The coordinate plane is built from the distances between the beacons, which the
+ *     beacons measure themselves at boot and put in their advertisement.
+ *
+ * The same sources also build the BEACON firmware (CONFIG_IL_BEACON_ID = 1..4, see
+ * beacon_main() and beacon_reflector.c).
  */
 
 #include <math.h>
@@ -42,6 +46,7 @@
 #include <bluetooth/cs_de.h>
 
 #include "trilat_bridge.h"
+#include "il_beacon.h"
 
 #include <dk_buttons_and_leds.h>
 
@@ -79,28 +84,69 @@ BUILD_ASSERT(MAX_AP == 1, "This application uses antenna path 0 only");
 #define SAMPLES_PER_TURN   CONFIG_IL_SAMPLES_PER_TURN
 #define TURN_TIMEOUT_MS    CONFIG_IL_TURN_TIMEOUT_MS
 #define BEACON_NAME_PREFIX "IL_B"
+/* 0 = this board is the mobile node, 1..NUM_BEACONS = this board is beacon IL_B<id> */
+#define MY_BEACON_ID       CONFIG_IL_BEACON_ID
+#define IS_BEACON          (MY_BEACON_ID > 0)
+
+BUILD_ASSERT(MY_BEACON_ID <= NUM_BEACONS, "CONFIG_IL_BEACON_ID is above CONFIG_IL_NUM_BEACONS");
 /* Median over the last N estimates of one beacon (spans ~2 turns). */
 #define DE_SLIDING_WINDOW_SIZE (5)
-/* A distance older than this is reported as "stale" */
-#define DISTANCE_MAX_AGE_MS (3000)
+/* A distance older than this is reported as "stale". Must cover one full round
+ * (every beacon may use its whole turn), or the first beacon of a slow round is
+ * already stale when the position is computed.
+ */
+#define DISTANCE_MAX_AGE_MS (NUM_BEACONS * TURN_TIMEOUT_MS + 1500)
 /* Timeout of each step of the per-beacon setup (security, discovery, CS config...) */
 #define SETUP_STEP_TIMEOUT_MS (5000)
 
-/* ---- Beacon coordinates (SYS-04) ---------------------------------------------------------
- * Position of every beacon in the room coordinate system, in MILLIMETERS: {x, y, z}.
- * Row 1 = beacon IL_B1, row 2 = IL_B2, ... Replace the TEMPORARY values below with the real
- * ones from SYS-04, then rebuild and reflash only this (mobile) board.
- * z = height of the beacon antenna above the floor.
+/* ---- Beacon layout (SYS-04) --------------------------------------------------------------
+ * The coordinate plane is built from the distances BETWEEN the beacons (antenna to antenna):
+ *
+ *        y ^
+ *          |      IL_B3
+ *          |     /     \
+ *          |  D13       D23
+ *          | /             \
+ *        IL_B1 ---- D12 ---- IL_B2 ---> x
+ *
+ *   IL_B1 = (0, 0)                  origin
+ *   IL_B2 = (D12, 0)                the x axis goes from IL_B1 through IL_B2
+ *   IL_B3 = (x3, y3), y3 > 0        x3 = (D12^2 + D13^2 - D23^2) / (2 * D12)
+ *                                   y3 = sqrt(D13^2 - x3^2)
+ *
+ * Looking from above, IL_B1 -> IL_B2 -> IL_B3 must go COUNTER-CLOCKWISE (IL_B3 on the left
+ * when you stand at IL_B1 and look at IL_B2); otherwise y comes out mirrored.
+ *
+ * CONFIG_IL_AUTO_LAYOUT=y (default): the beacons measure the distances themselves at boot
+ * and put them in their advertisement; the mobile node waits for them (wait_for_layout()).
+ * CONFIG_IL_AUTO_LAYOUT=n: the distances are the constants below (measured with a tape).
  */
-static const int32_t beacon_pos_mm[][3] = {
-	{    0,    0, 0 }, /* IL_B1  TEMPORARY */
-	{ 3000,    0, 0 }, /* IL_B2  TEMPORARY */
-	{    0, 3000, 0 }, /* IL_B3  TEMPORARY */
-	{ 3000, 3000, 0 }, /* IL_B4  TEMPORARY, used only with CONFIG_IL_NUM_BEACONS=4 */
-};
+#define BEACON_D12_MM (2000) /* IL_B1 <-> IL_B2 */
+#define BEACON_D13_MM (2000) /* IL_B1 <-> IL_B3 */
+#define BEACON_D23_MM (2000) /* IL_B2 <-> IL_B3 */
+
+/* Only with CONFIG_IL_AUTO_LAYOUT=n and CONFIG_IL_NUM_BEACONS=4: {x, y} of IL_B4 in the
+ * plane above, mm. TEMPORARY.
+ */
+#define BEACON_4_X_MM (2000)
+#define BEACON_4_Y_MM (2000)
+
+/* Height of every beacon antenna above the floor, mm (index 0 = IL_B1). */
+static const int32_t beacon_z_mm[] = { 0, 0, 0, 0 };
 
 /* Height of the mobile board antenna above the floor, mm (on the toy car). */
 #define MOBILE_Z_MM (0)
+
+#define MAX_BEACONS 4
+
+/* Distance between beacon i+1 and beacon j+1, mm (symmetric, 0 = not known yet). */
+static uint16_t beacon_dist_mm[MAX_BEACONS][MAX_BEACONS];
+/* Beacon {x, y} in the plane above, mm. Filled by beacon_layout_build(). */
+static int32_t beacon_xy_mm[MAX_BEACONS][2];
+/* beacon_xy_mm is usable */
+static bool layout_valid;
+/* Mobile node: the layout is final, beacons may be connected */
+static bool layout_ready;
 
 /* ---- Distance calibration (copied from ../cs_initiator, see the comment there) ----
  * Actual_distance = (Raw_measurement - OFFSET) / SLOPE
@@ -148,12 +194,17 @@ struct beacon {
 	float distance_m;
 	enum il_status status;
 	uint32_t updated_ms;
+	/* uncalibrated medians behind distance_m, for the $RAW line (calibration) */
+	cs_de_dist_estimates_t raw;
 };
 
 static struct beacon beacons[NUM_BEACONS];
 
-BUILD_ASSERT(ARRAY_SIZE(beacon_pos_mm) >= NUM_BEACONS,
-	     "Add coordinates for every beacon to beacon_pos_mm");
+BUILD_ASSERT(ARRAY_SIZE(beacon_z_mm) >= NUM_BEACONS && MAX_BEACONS >= NUM_BEACONS,
+	     "Add a position for every beacon");
+
+/* Beacon build: the only beacon the scanner may connect to (0 = any). */
+static uint8_t scan_target_id;
 
 /* Beacon being set up (connection phase) and beacon being ranged (CS phase).
  * Only one of each at a time, so the step buffers below can be shared.
@@ -635,6 +686,10 @@ static struct bt_gatt_dm_cb discovery_cb = {
 
 static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_security_err err)
 {
+	if (beacon_by_conn(conn) == NULL) {
+		return; /* beacon build: the link from the mobile node */
+	}
+
 	if (err) {
 		LOG_ERR("Security failed: level %u err %d %s", level, err,
 			bt_security_err_to_str(err));
@@ -648,8 +703,8 @@ static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_
 
 static bool le_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
 {
-	/* Ignore peer parameter preferences. */
-	return false;
+	/* Ignore peer parameter preferences on the links we created. */
+	return beacon_by_conn(conn) == NULL;
 }
 
 static void update_status_led(void)
@@ -659,6 +714,10 @@ static void update_status_led(void)
 	for (int i = 0; i < NUM_BEACONS; i++) {
 		ready += beacons[i].ready ? 1 : 0;
 	}
+	if (IS_BEACON) {
+		return; /* the LED of a beacon is driven by its own role code */
+	}
+
 	/* LED on only when every beacon is connected and set up */
 	if (ready == NUM_BEACONS) {
 		dk_set_led_on(CON_STATUS_LED);
@@ -727,6 +786,10 @@ static void remote_capabilities_cb(struct bt_conn *conn, uint8_t status,
 {
 	ARG_UNUSED(params);
 
+	if (beacon_by_conn(conn) == NULL) {
+		return;
+	}
+
 	if (status != BT_HCI_ERR_SUCCESS) {
 		LOG_WRN("CS capability exchange failed. (HCI status 0x%02x)", status);
 	}
@@ -739,7 +802,11 @@ static void config_create_cb(struct bt_conn *conn, uint8_t status,
 {
 	struct beacon *b = beacon_by_conn(conn);
 
-	if (status == BT_HCI_ERR_SUCCESS && b) {
+	if (b == NULL) {
+		return;
+	}
+
+	if (status == BT_HCI_ERR_SUCCESS) {
 		b->cs_config = *config;
 		LOG_INF("B%u: CS config created (mode %u)", b->id, config->mode);
 	} else {
@@ -751,6 +818,10 @@ static void config_create_cb(struct bt_conn *conn, uint8_t status,
 
 static void security_enable_cb(struct bt_conn *conn, uint8_t status)
 {
+	if (beacon_by_conn(conn) == NULL) {
+		return;
+	}
+
 	if (status != BT_HCI_ERR_SUCCESS) {
 		LOG_WRN("CS security enable failed. (HCI status 0x%02x)", status);
 	}
@@ -761,6 +832,10 @@ static void security_enable_cb(struct bt_conn *conn, uint8_t status)
 static void procedure_enable_cb(struct bt_conn *conn, uint8_t status,
 				struct bt_conn_le_cs_procedure_enable_complete *params)
 {
+	if (beacon_by_conn(conn) == NULL) {
+		return;
+	}
+
 	if (status == BT_HCI_ERR_SUCCESS) {
 		procedure_enabled_state = (params->state == 1);
 		if (procedure_enabled_state) {
@@ -820,10 +895,25 @@ static uint16_t acl_interval_for(const struct beacon *b)
 	return ACL_CONN_INTERVAL_BASE + (b->id - 1) * ACL_CONN_INTERVAL_STEP;
 }
 
-static bool parse_name_cb(struct bt_data *data, void *user_data)
+struct beacon_adv {
+	int id;               /* from the name "IL_B<id>", -1 if this is not a beacon */
+	const uint8_t *dist;  /* distance entries of the manufacturer data (il_beacon.h) */
+	uint8_t dist_len;
+};
+
+static bool parse_adv_cb(struct bt_data *data, void *user_data)
 {
-	int *beacon_id = user_data;
+	struct beacon_adv *adv = user_data;
 	const size_t prefix_len = sizeof(BEACON_NAME_PREFIX) - 1;
+
+	if (data->type == BT_DATA_MANUFACTURER_DATA) {
+		if (data->data_len >= sizeof(uint16_t) &&
+		    sys_get_le16(data->data) == IL_ADV_COMPANY_ID) {
+			adv->dist = data->data + sizeof(uint16_t);
+			adv->dist_len = data->data_len - sizeof(uint16_t);
+		}
+		return true;
+	}
 
 	if (data->type != BT_DATA_NAME_COMPLETE && data->type != BT_DATA_NAME_SHORTENED) {
 		return true;
@@ -832,37 +922,73 @@ static bool parse_name_cb(struct bt_data *data, void *user_data)
 	/* Expect exactly "IL_B" + one or two digits */
 	if (data->data_len <= prefix_len || data->data_len > prefix_len + 2 ||
 	    memcmp(data->data, BEACON_NAME_PREFIX, prefix_len) != 0) {
-		return false;
+		return true;
 	}
 
 	int id = 0;
 
 	for (size_t i = prefix_len; i < data->data_len; i++) {
 		if (data->data[i] < '0' || data->data[i] > '9') {
-			return false;
+			return true;
 		}
 		id = id * 10 + (data->data[i] - '0');
 	}
-	*beacon_id = id;
-	return false;
+	adv->id = id;
+	return true;
+}
+
+/* Stores the beacon-to-beacon distances that beacon `id` advertises. */
+static void record_beacon_distances(int id, const uint8_t *entries, uint8_t len)
+{
+	if (layout_ready) {
+		return; /* the plane is already built: keep it stable */
+	}
+
+	for (uint8_t i = 0; i + IL_ADV_ENTRY_LEN <= len; i += IL_ADV_ENTRY_LEN) {
+		uint8_t peer = entries[i];
+		uint16_t mm = sys_get_le16(&entries[i + 1]);
+
+		if (peer < 1 || peer > NUM_BEACONS || peer == id || mm == 0) {
+			continue;
+		}
+		beacon_dist_mm[id - 1][peer - 1] = mm;
+		beacon_dist_mm[peer - 1][id - 1] = mm;
+	}
 }
 
 static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 			 struct net_buf_simple *ad)
 {
-	int id = -1;
+	struct beacon_adv adv = {.id = -1};
 	int err;
-
-	if (connecting_beacon != NULL) {
-		return;
-	}
 
 	if (type != BT_GAP_ADV_TYPE_ADV_IND && type != BT_GAP_ADV_TYPE_ADV_DIRECT_IND) {
 		return;
 	}
 
-	bt_data_parse(ad, parse_name_cb, &id);
-	if (id < 1 || id > NUM_BEACONS) {
+	bt_data_parse(ad, parse_adv_cb, &adv);
+
+	const int id = adv.id;
+
+	if (id < 1 || id > NUM_BEACONS || id == MY_BEACON_ID) {
+		return;
+	}
+
+	if (!IS_BEACON && IS_ENABLED(CONFIG_IL_AUTO_LAYOUT)) {
+		if (adv.dist != NULL) {
+			record_beacon_distances(id, adv.dist, adv.dist_len);
+		}
+		if (!layout_ready) {
+			/* Do not occupy a beacon while the beacons still measure each other. */
+			return;
+		}
+	}
+
+	if (scan_target_id != 0 && id != scan_target_id) {
+		return;
+	}
+
+	if (connecting_beacon != NULL) {
 		return;
 	}
 
@@ -1224,8 +1350,7 @@ static float calibrated_distance(struct beacon *b, bool *valid)
 		weight_sum += RTT_WEIGHT;
 	}
 
-	LOG_DBG("B%u raw IFFT:%.2f Phase:%.2f RTT:%.2f", b->id, (double)d.ifft,
-		(double)d.phase_slope, (double)d.rtt);
+	b->raw = d;
 
 	*valid = weight_sum > 0.0f;
 	return *valid ? weighted_sum / weight_sum : NAN;
@@ -1261,6 +1386,18 @@ static void print_measurement(const struct beacon *b)
 	snprintk(body, sizeof(body), "RNG,%u,%u,%u,%d,%u", rng_seq++, k_uptime_get_32(), b->id,
 		 dist_mm, (unsigned int)b->status);
 	printk("$%s*%02X\r\n", body, nmea_checksum(body));
+
+	if (IS_ENABLED(CONFIG_IL_RAW_OUTPUT) && b->status == IL_STATUS_OK) {
+		/* $RAW,<seq of the $RNG line>,<beacon_id>,<ifft_mm>,<phase_slope_mm>,<rtt_mm>
+		 * Uncalibrated estimates behind the $RNG distance, -1 = not available.
+		 */
+		snprintk(body, sizeof(body), "RAW,%u,%u,%d,%d,%d", rng_seq - 1, b->id,
+			 isfinite(b->raw.ifft) ? (int)lroundf(b->raw.ifft * 1000.0f) : -1,
+			 isfinite(b->raw.phase_slope) ?
+				 (int)lroundf(b->raw.phase_slope * 1000.0f) : -1,
+			 isfinite(b->raw.rtt) ? (int)lroundf(b->raw.rtt * 1000.0f) : -1);
+		printk("$%s*%02X\r\n", body, nmea_checksum(body));
+	}
 }
 
 /**
@@ -1300,6 +1437,113 @@ enum il_pos_status {
 
 static uint32_t pos_seq;
 
+/**
+ * @brief Build the coordinate plane (beacon_xy_mm) from beacon_dist_mm.
+ *
+ * See the "Beacon layout" comment at the top of this file. Sets layout_valid.
+ */
+static void beacon_layout_build(void)
+{
+	const float d12 = beacon_dist_mm[0][1];
+	const float d13 = beacon_dist_mm[0][2];
+	const float d23 = beacon_dist_mm[1][2];
+	float x3 = 0.0f, y3 = 0.0f;
+
+	memset(beacon_xy_mm, 0, sizeof(beacon_xy_mm));
+	layout_valid = false;
+
+	LOG_INF("Beacon distances: B1-B2 %d mm, B1-B3 %d mm, B2-B3 %d mm", beacon_dist_mm[0][1],
+		beacon_dist_mm[0][2], beacon_dist_mm[1][2]);
+
+	if (NUM_BEACONS >= 3) {
+		float y3_sq;
+
+		if (d12 <= 0.0f) {
+			LOG_ERR("Beacon layout: the B1-B2 distance is missing");
+			return;
+		}
+
+		x3 = (d12 * d12 + d13 * d13 - d23 * d23) / (2.0f * d12);
+		y3_sq = d13 * d13 - x3 * x3;
+		if (y3_sq <= 0.0f) {
+			LOG_ERR("Beacon layout: the distances do not form a triangle");
+			return;
+		}
+		y3 = sqrtf(y3_sq);
+
+		beacon_xy_mm[1][0] = (int32_t)lroundf(d12);
+		beacon_xy_mm[2][0] = (int32_t)lroundf(x3);
+		beacon_xy_mm[2][1] = (int32_t)lroundf(y3);
+	}
+
+	if (NUM_BEACONS >= 4) {
+		if (IS_ENABLED(CONFIG_IL_AUTO_LAYOUT)) {
+			/* IL_B4 from its distances to IL_B1, IL_B2 and IL_B3 */
+			const float d14 = beacon_dist_mm[0][3];
+			const float d24 = beacon_dist_mm[1][3];
+			const float d34 = beacon_dist_mm[2][3];
+			const float x4 = (d14 * d14 - d24 * d24 + d12 * d12) / (2.0f * d12);
+			const float y4 = (d14 * d14 - d34 * d34 + x3 * x3 + y3 * y3 -
+					  2.0f * x3 * x4) / (2.0f * y3);
+
+			beacon_xy_mm[3][0] = (int32_t)lroundf(x4);
+			beacon_xy_mm[3][1] = (int32_t)lroundf(y4);
+		} else {
+			beacon_xy_mm[3][0] = BEACON_4_X_MM;
+			beacon_xy_mm[3][1] = BEACON_4_Y_MM;
+		}
+	}
+
+	layout_valid = true;
+
+	for (int i = 0; i < NUM_BEACONS; i++) {
+		LOG_INF("Beacon IL_B%d at x=%d y=%d z=%d mm", i + 1, beacon_xy_mm[i][0],
+			beacon_xy_mm[i][1], beacon_z_mm[i]);
+	}
+}
+
+/* Number of beacon pairs with a known distance, and the number of pairs in total. */
+static int layout_pairs_known(int *total)
+{
+	int known = 0;
+
+	*total = 0;
+	for (int i = 0; i < NUM_BEACONS; i++) {
+		for (int j = i + 1; j < NUM_BEACONS; j++) {
+			(*total)++;
+			known += beacon_dist_mm[i][j] != 0 ? 1 : 0;
+		}
+	}
+	return known;
+}
+
+/**
+ * @brief Mobile node: scan (without connecting) until the beacons advertise the distances
+ *        between all of them.
+ */
+static void wait_for_layout(void)
+{
+	int total;
+	uint32_t seconds = 0;
+
+	while (layout_pairs_known(&total) < total) {
+		int err = bt_le_scan_start(BT_LE_SCAN_PASSIVE_CONTINUOUS, device_found);
+
+		if (err && err != -EALREADY) {
+			LOG_ERR("Scanning failed to start (err %d)", err);
+		}
+
+		k_sleep(K_MSEC(1000));
+		/* Restart the scan every second: it reports every advertiser only once. */
+		(void)bt_le_scan_stop();
+
+		if (++seconds % 5 == 0) {
+			LOG_INF("Waiting for the beacons to measure each other: %d of %d "
+				"distances received", layout_pairs_known(&total), total);
+		}
+	}
+}
+
 static void compute_and_print_position(void)
 {
 	float dist_m[NUM_BEACONS];
@@ -1320,17 +1564,19 @@ static void compute_and_print_position(void)
 		/* The CS distance is 3D; remove the height difference to get the distance
 		 * on the floor plane: d_floor = sqrt(d^2 - dz^2)
 		 */
-		float dz_m = (beacon_pos_mm[i][2] - MOBILE_Z_MM) / 1000.0f;
+		float dz_m = (beacon_z_mm[i] - MOBILE_Z_MM) / 1000.0f;
 		float d2 = dist_m[i] * dist_m[i] - dz_m * dz_m;
 
-		anchor_xy_m[n][0] = beacon_pos_mm[i][0] / 1000.0f;
-		anchor_xy_m[n][1] = beacon_pos_mm[i][1] / 1000.0f;
+		anchor_xy_m[n][0] = beacon_xy_mm[i][0] / 1000.0f;
+		anchor_xy_m[n][1] = beacon_xy_mm[i][1] / 1000.0f;
 		horiz_m[n] = d2 > 0.0f ? sqrtf(d2) : 0.0f;
 		n++;
 	}
 
 	if (n < 3) {
 		status = IL_POS_TOO_FEW_BEACONS;
+	} else if (!layout_valid) {
+		status = IL_POS_BAD_GEOMETRY;
 	} else if (il_trilaterate_2d(anchor_xy_m, horiz_m, n, &x_m, &y_m) &&
 		   isfinite(x_m) && isfinite(y_m)) {
 		status = IL_POS_OK;
@@ -1352,6 +1598,107 @@ static void compute_and_print_position(void)
 	printk("$%s*%02X\r\n", body, nmea_checksum(body));
 }
 
+/* ------------------------------------------------------------------------- */
+/* Beacon build: measure the distance to the other beacons, then be a reflector */
+/* ------------------------------------------------------------------------- */
+
+#if IS_BEACON
+
+/* Distances (one per ranging turn) used for one beacon-to-beacon measurement */
+#define SURVEY_SAMPLES     (10)
+#define SURVEY_MIN_SAMPLES (5)
+#define SURVEY_MAX_TURNS   (25)
+
+/* Disconnects a beacon link (if any) and waits until it is really gone. */
+static void disconnect_and_wait(struct beacon *b)
+{
+	struct bt_conn *conn = b->conn;
+
+	if (conn != NULL) {
+		(void)bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+	}
+
+	for (int i = 0; i < 250 && b->conn != NULL; i++) {
+		k_sleep(K_MSEC(20));
+	}
+}
+
+/**
+ * @brief Measure the distance to one connected beacon.
+ *
+ * @return median of SURVEY_SAMPLES distances in mm, 0 if the measurement failed.
+ */
+static uint16_t survey_beacon(struct beacon *b)
+{
+	static float samples[SURVEY_SAMPLES];
+	int n = 0;
+
+	memset(&b->de_buf, 0, sizeof(b->de_buf));
+
+	for (int turn = 0; turn < SURVEY_MAX_TURNS && n < SURVEY_SAMPLES && b->conn; turn++) {
+		ranging_turn(b);
+		dk_set_led(CON_STATUS_LED, turn & 1); /* blinks while measuring */
+
+		if (b->status == IL_STATUS_OK) {
+			samples[n++] = b->distance_m;
+		}
+	}
+
+	dk_set_led_off(CON_STATUS_LED);
+
+	if (n < SURVEY_MIN_SAMPLES) {
+		LOG_WRN("B%u: only %d usable distances, measuring again later", b->id, n);
+		return 0;
+	}
+
+	return (uint16_t)CLAMP(lroundf(median_inplace(n, samples) * 1000.0f), 1, UINT16_MAX);
+}
+
+static void beacon_main(void)
+{
+	static uint8_t entries[(MAX_BEACONS - 1) * IL_ADV_ENTRY_LEN];
+	size_t len = 0;
+	int remaining = NUM_BEACONS - MY_BEACON_ID;
+
+	LOG_INF("Beacon IL_B%d: measuring the distance to %d other beacon(s)", MY_BEACON_ID,
+		remaining);
+
+	/* One beacon at a time, and the link is closed right after the measurement, so the
+	 * other beacons (and later the mobile node) can use that beacon too.
+	 */
+	while (remaining > 0) {
+		for (int id = MY_BEACON_ID + 1; id <= NUM_BEACONS; id++) {
+			struct beacon *b = &beacons[id - 1];
+			uint16_t mm = 0;
+
+			if (beacon_dist_mm[MY_BEACON_ID - 1][id - 1] != 0) {
+				continue; /* already measured */
+			}
+
+			scan_target_id = id;
+			connect_one_missing_beacon(2000);
+
+			if (b->ready && b->conn) {
+				mm = survey_beacon(b);
+			}
+			disconnect_and_wait(b);
+
+			if (mm != 0) {
+				LOG_INF("Distance IL_B%d - IL_B%d: %u mm", MY_BEACON_ID, id, mm);
+				beacon_dist_mm[MY_BEACON_ID - 1][id - 1] = mm;
+				entries[len] = id;
+				sys_put_le16(mm, &entries[len + 1]);
+				len += IL_ADV_ENTRY_LEN;
+				remaining--;
+			}
+		}
+	}
+
+	il_reflector_run(entries, len);
+}
+
+#endif /* IS_BEACON */
+
 int main(void)
 {
 	int err;
@@ -1371,6 +1718,20 @@ int main(void)
 		LOG_ERR("Bluetooth init failed (err %d)", err);
 		return 0;
 	}
+
+#if IS_BEACON
+	beacon_main(); /* never returns */
+#endif
+
+	if (IS_ENABLED(CONFIG_IL_AUTO_LAYOUT)) {
+		wait_for_layout();
+	} else {
+		beacon_dist_mm[0][1] = beacon_dist_mm[1][0] = BEACON_D12_MM;
+		beacon_dist_mm[0][2] = beacon_dist_mm[2][0] = BEACON_D13_MM;
+		beacon_dist_mm[1][2] = beacon_dist_mm[2][1] = BEACON_D23_MM;
+	}
+	beacon_layout_build();
+	layout_ready = true;
 
 	/* Startup: wait (up to ~15 s) until every beacon is connected */
 	int64_t startup_deadline = k_uptime_get() + 15000;
