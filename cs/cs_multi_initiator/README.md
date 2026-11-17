@@ -88,6 +88,11 @@ Beacons, in this folder, one build folder per board (change the id):
 
 Output: `build_b1\cs_multi_initiator\zephyr\zephyr.hex`.
 
+A beacon build has no serial output (`CONFIG_SERIAL=n` in `beacon.conf`), so the beacons can
+run on a battery without USB. Check a beacon by its LED: blinking while it measures the other
+beacons at boot. To see its log for debugging, build it once without the two lines at the end
+of `beacon.conf`.
+
 Mobile node:
 
     west build -b xiao_nrf54l15/nrf54l15/cpuapp --pristine
