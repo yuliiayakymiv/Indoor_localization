@@ -1,7 +1,0 @@
-default: cs_multi_initiator
-build_dir: E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b2log
-domains:
-  - name: cs_multi_initiator
-    build_dir: E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b2log/cs_multi_initiator
-flash_order:
-  - cs_multi_initiator
