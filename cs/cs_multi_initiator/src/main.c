@@ -509,7 +509,7 @@ static void ranging_data_cb(struct bt_conn *conn, uint16_t ranging_counter, int 
 	}
 
 	if (latest_local_steps.len == 0) {
-		LOG_WRN("B%u: all subevents of ranging counter %u were aborted "
+		LOG_DBG("B%u: all subevents of ranging counter %u were aborted "
 			"(subevent reason 0x%x, procedure reason 0x%x)", b->id, ranging_counter,
 			last_subevent_abort_reason, last_procedure_abort_reason);
 		release_step_buffers();
@@ -603,7 +603,7 @@ static void subevent_result_cb(struct bt_conn *conn, struct bt_conn_le_cs_subeve
 		most_recent_local_ranging_counter =
 			bt_ras_rreq_get_ranging_counter(result->header.procedure_counter);
 	} else if (result->header.procedure_done_status == BT_CONN_LE_CS_PROCEDURE_ABORTED) {
-		LOG_WRN("B%u: procedure %u aborted", active_beacon->id,
+		LOG_DBG("B%u: procedure %u aborted", active_beacon->id,
 			result->header.procedure_counter);
 		net_buf_simple_reset(&latest_local_steps);
 		k_sem_give(&sem_local_steps);
@@ -839,7 +839,7 @@ static void procedure_enable_cb(struct bt_conn *conn, uint8_t status,
 	if (status == BT_HCI_ERR_SUCCESS) {
 		procedure_enabled_state = (params->state == 1);
 		if (procedure_enabled_state) {
-			LOG_INF("CS on: subevent %u us x %u per event, event interval %u, "
+			LOG_DBG("CS on: subevent %u us x %u per event, event interval %u, "
 				"procedure interval %u, max len %u",
 				params->subevent_len, params->subevents_per_event,
 				params->event_interval, params->procedure_interval,
