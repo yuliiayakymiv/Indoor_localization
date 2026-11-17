@@ -5,7 +5,7 @@
 menu "Indoor localization"
 
 config IL_BEACON_ID
-	int "Beacon id (advertised name becomes IL_B1)"
+	int "Beacon id (advertised name becomes IL_B<id>)"
 	default 1
 	range 1 9
 
