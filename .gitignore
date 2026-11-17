@@ -1,6 +1,7 @@
-# Build output (west / nRF Connect)
+# Build output (west / nRF Connect), also short names like b1/, b3log/, b3int/
 build/
-build_*/
+build*/
+b[0-9]*/
 
 # Local tools (OpenOCD binaries, downloaded archives)
 tools/openocd/
