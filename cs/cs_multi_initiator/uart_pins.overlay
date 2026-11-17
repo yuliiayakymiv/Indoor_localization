@@ -1,0 +1,19 @@
+/*
+ * Mobile node on the drone battery, without USB:
+ *   west build -b xiao_nrf54l15/nrf54l15/cpuapp --pristine -- -DEXTRA_DTC_OVERLAY_FILE=uart_pins.overlay
+ *
+ * The console ($RNG, $POS and the log, 115200 baud) moves from the USB port (uart20) to the
+ * pins D6 = TX (P2.08) and D7 = RX (P2.07) (uart21), for the Raspberry Pi / flight controller.
+ * uart20 is turned off: on a battery the USB-UART bridge of the XIAO is not powered, and a
+ * driven TX line would back-power it, so the board may not start.
+ */
+/ {
+	chosen {
+		zephyr,console = &uart21;
+		zephyr,shell-uart = &uart21;
+	};
+};
+
+&uart20 {
+	status = "disabled";
+};

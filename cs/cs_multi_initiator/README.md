@@ -97,6 +97,14 @@ Mobile node:
 
     west build -b xiao_nrf54l15/nrf54l15/cpuapp --pristine
 
+Mobile node on the drone battery (no USB): the output goes to the pins instead of the USB port,
+D6 = TX, D7 = RX, 115200 baud, 3.3 V logic (see `uart_pins.overlay`):
+
+    west build -b xiao_nrf54l15/nrf54l15/cpuapp --pristine -- -DEXTRA_DTC_OVERLAY_FILE=uart_pins.overlay
+
+Wiring: D6 (TX) -> RX of the Raspberry Pi / flight controller, D7 (RX) -> its TX, GND -> GND.
+With this build nothing comes out of the USB port; flashing over USB still works.
+
 Antenna: by default the boards use the **external** FPC antenna on the U.FL connector
 (`CONFIG_IL_EXTERNAL_ANTENNA=y`, see `src/antenna.c`). Plug the antenna in before powering the
 board. For the onboard ceramic antenna add `-DCONFIG_IL_EXTERNAL_ANTENNA=n`. Use the same
