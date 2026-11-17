@@ -8,7 +8,7 @@ project(indoor_localization)
 # Source files
 target_sources(app PRIVATE
     # src/main.cpp                    
-    trilateration/trilateration.cpp   # 3D position math
+    trilateration/trilateration.cpp   # 2D / 3D position math
     mavlink/mavlink_packer.cpp        # MAVLink packing
     uart/uart_sender.cpp              # UART sending
 )

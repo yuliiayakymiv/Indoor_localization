@@ -1,4 +1,4 @@
-# channel_sounding_ras_initiator (Seeed XIAO nRF54L15, NCS 3.4.2)
+# cs_initiator (Seeed XIAO nRF54L15, NCS 3.4.2)
 
 BLE Channel Sounding **initiator** (ranging requestor). It scans for a RAS reflector, connects,
 runs Channel Sounding and prints distance estimates over the UART.
@@ -8,7 +8,7 @@ Only change vs. the stock sample: `distance_estimates_print()` in `src/main.c` a
 linear calibration (`PHASE_*`, `RTT_*`, `IFFT_*` constants at the top of the file) and prints
 `[AP0] IFFT:..m Phase:..m RTT:..m -> Best:..m`.
 
-Pair it with `../channel_sounding_ras_reflector` on a second board.
+Pair it with `../cs_reflector` on a second board.
 
 ## Requirements
 - nRF Connect SDK **v3.4.2** and its toolchain (nRF Connect extension -> Manage SDKs).
@@ -25,7 +25,7 @@ From an "nRF Connect SDK v3.4.2" terminal, in this folder:
 (or in VS Code: add this folder as an application, board `xiao_nrf54l15/nrf54l15/cpuapp`,
 SDK/toolchain 3.4.2, use sysbuild, leave "Board root" empty).
 
-Output: `build\channel_sounding_ras_initiator\zephyr\zephyr.hex`
+Output: `build\cs_initiator\zephyr\zephyr.hex`
 
 If a build ever behaves strangely after changing SDK versions or settings, delete the `build`
 folder and build again.

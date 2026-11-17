@@ -20,7 +20,7 @@
 #>
 param(
     [string]$Probe,
-    [string]$Hex = "build\channel_sounding_ras_initiator\zephyr\zephyr.hex",
+    [string]$Hex = "build\cs_initiator\zephyr\zephyr.hex",
     [switch]$Erase,
     [switch]$List
 )

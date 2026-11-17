@@ -22,7 +22,7 @@ position is meant to be sent to the flight controller as MAVLink.
 |---|---|
 | [`cs/cs_multi_initiator`](cs/cs_multi_initiator/README.md) | **Main firmware.** Mobile node (drone) and, with `beacon.conf`, the beacons. Beacons measure the distances between each other at boot, so the coordinate plane builds itself. Prints `$RNG` (distance per beacon) and `$POS` (x, y). |
 | [`cs/cs_initiator`](cs/cs_initiator/README.md) | Single-beacon CS initiator (Nordic `ras_initiator` + our calibration). Where the calibration constants come from. |
-| [`cs/cs_reflector`](cs/cs_reflector/README.md) | Older beacon firmware (stock Nordic `ras_reflector`, advertises as `IL_B<id>`). Does not measure the other beacons. |
+| [`cs/cs_reflector`](cs/cs_reflector/README.md) | Older beacon firmware (Nordic `ras_reflector`, only changed to advertise as `IL_B<id>`). Does not measure the other beacons. |
 | `trilateration/` | Position math shared by all targets: 2D / 3D trilateration, Kalman filter (`kalman.hpp`, not wired in yet). |
 | `mavlink/` | Packs the position into MAVLink (`VISION_POSITION_ESTIMATE`, heartbeat); `test_mavlink_packer.cpp` runs on a PC. |
 | `lib/mavlink` | MAVLink C library (git submodule, header-only). |
