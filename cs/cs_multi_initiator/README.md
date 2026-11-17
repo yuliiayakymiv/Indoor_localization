@@ -92,6 +92,11 @@ Mobile node:
 
     west build -b xiao_nrf54l15/nrf54l15/cpuapp --pristine
 
+Antenna: by default the boards use the **external** FPC antenna on the U.FL connector
+(`CONFIG_IL_EXTERNAL_ANTENNA=y`, see `src/antenna.c`). Plug the antenna in before powering the
+board. For the onboard ceramic antenna add `-DCONFIG_IL_EXTERNAL_ANTENNA=n`. Use the same
+antenna on all boards and recalibrate after switching (the constants were fitted with onboard antennas).
+
 To use 4 beacons later: add `-- -DCONFIG_IL_NUM_BEACONS=4` (or change the default in `Kconfig`).
 
 Output: `build\cs_multi_initiator\zephyr\zephyr.hex`

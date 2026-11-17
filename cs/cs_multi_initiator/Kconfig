@@ -65,6 +65,15 @@ config IL_AUTO_LAYOUT
 	  each other and builds the coordinate plane from them.
 	  n: the distances are the BEACON_Dxx_MM constants in src/main.c.
 
+config IL_EXTERNAL_ANTENNA
+	bool "Use the external antenna (U.FL connector) instead of the onboard one"
+	default y
+	select GPIO
+	help
+	  y: the XIAO RF switch (P2.05) selects the U.FL connector, the FPC antenna must be
+	  plugged in. n: the onboard ceramic antenna. See src/antenna.c.
+	  The distance calibration in src/main.c was fitted with onboard antennas.
+
 config IL_RAW_OUTPUT
 	bool "Print a $RAW line with the uncalibrated distance estimates (for calibration)"
 	default n
