@@ -31,7 +31,6 @@ position is meant to be sent to the flight controller as MAVLink.
 | `CMakeLists.txt` (root) | Zephyr app that builds trilateration + MAVLink + UART together. |
 | `nRF54L15_files/` | Early test app (trilateration on the board). |
 | `tools/laptop_receiver.py` | Reads the board's serial port on a laptop (`pip install -r tools/requirements.txt`). |
-| [`lora_wiring.md`](lora_wiring.md) | Wiring of the Ra-02 (SX1278) LoRa module to the XIAO. |
 
 After cloning, fetch the submodule:
 

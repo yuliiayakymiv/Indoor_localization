@@ -76,5 +76,4 @@ moving the boards, same antenna orientation, away from walls/floor/bodies, then 
 
 ## Layout
 - `src/main.c` - application
-- `prj.conf`, `Kconfig`, `Kconfig.sysbuild`, `sysbuild/` - stock Nordic configuration
-- `boards/` - stock overlays for Nordic boards (XIAO needs none)
+- `prj.conf`, `Kconfig`, `Kconfig.sysbuild` - stock Nordic configuration

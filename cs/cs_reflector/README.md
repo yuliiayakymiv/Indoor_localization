@@ -32,4 +32,6 @@ probe ID of the reflector board:
 firmware at boot.
 
 ## Layout
-- `src/main.c`, `prj.conf`, `Kconfig.sysbuild`, `sysbuild/`, `boards/`, `android_ranging.conf` - stock Nordic files
+- `src/main.c` - Nordic reflector, advertises as `IL_B<id>`
+- `prj.conf`, `Kconfig.sysbuild`, `android_ranging.conf` - stock Nordic files
+- `boards/xiao_nrf54l15_nrf54l15_cpuapp.overlay` - empty overlay for the XIAO
