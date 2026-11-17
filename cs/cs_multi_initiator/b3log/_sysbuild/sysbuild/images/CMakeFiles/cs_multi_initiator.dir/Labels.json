@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/CMakeFiles/cs_multi_initiator"
+		},
+		{
+			"file" : "E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/CMakeFiles/cs_multi_initiator.rule"
+		},
+		{
+			"file" : "E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/CMakeFiles/cs_multi_initiator-complete.rule"
+		},
+		{
+			"file" : "E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-build.rule"
+		},
+		{
+			"file" : "E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-configure.rule"
+		},
+		{
+			"file" : "E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-download.rule"
+		},
+		{
+			"file" : "E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-install.rule"
+		},
+		{
+			"file" : "E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-mkdir.rule"
+		},
+		{
+			"file" : "E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-patch.rule"
+		},
+		{
+			"file" : "E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"cs_multi_initiator"
+		],
+		"name" : "cs_multi_initiator"
+	}
+}

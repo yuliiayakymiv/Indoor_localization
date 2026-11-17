@@ -1,0 +1,19 @@
+# ninja log v7
+44	137	8166396833670359	_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-mkdir	e35b9aa5b81bfaa7
+44	137	8166396833670359	E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-mkdir	e35b9aa5b81bfaa7
+137	200	8166396834307116	_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-download	3b81da2904e48ddf
+137	200	8166396834307116	E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-download	3b81da2904e48ddf
+201	264	8166396834950462	_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-update	63222ab6099fbcf4
+201	264	8166396834950462	E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-update	63222ab6099fbcf4
+264	327	8166396835563268	_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-patch	862fad32555db40b
+264	327	8166396835563268	E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-patch	862fad32555db40b
+327	388	8166396836185634	_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-configure	3a7a13541f97a33
+327	388	8166396836185634	E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-configure	3a7a13541f97a33
+388	11331	8166396836246513	_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-build	499f421662421474
+388	11331	8166396836246513	E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-build	499f421662421474
+11331	11369	8166396945670819	_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-install	917e99122e9c4289
+11331	11369	8166396945670819	E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-install	917e99122e9c4289
+11369	11458	8166396946886037	_sysbuild/sysbuild/images/CMakeFiles/cs_multi_initiator-complete	7062b6b224509d15
+11369	11458	8166396946886037	_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-done	7062b6b224509d15
+11369	11458	8166396946886037	E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/CMakeFiles/cs_multi_initiator-complete	7062b6b224509d15
+11369	11458	8166396946886037	E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b3log/_sysbuild/sysbuild/images/cs_multi_initiator-prefix/src/cs_multi_initiator-stamp/cs_multi_initiator-done	7062b6b224509d15

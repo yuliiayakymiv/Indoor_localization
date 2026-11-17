@@ -1,0 +1,15 @@
+{
+	"InstallScripts" : 
+	[
+		"E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b1log/cmake_install.cmake",
+		"E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b1log/_sysbuild/cmake_install.cmake",
+		"E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b1log/_sysbuild/sysbuild/images/cmake_install.cmake",
+		"E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b1log/_sysbuild/sysbuild/images/bootloader/cmake_install.cmake",
+		"E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b1log/_sysbuild/sysbuild/images/firmware_loader/cmake_install.cmake",
+		"E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b1log/modules/nrf/cmake_install.cmake",
+		"E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b1log/modules/mcuboot/cmake_install.cmake",
+		"E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b1log/_sysbuild/sysbuild/images/boards/cmake_install.cmake",
+		"E:/UCU/2_course/1_semester/POK/project/Indoor_localization/cs/cs_multi_initiator/b1log/_sysbuild/sysbuild/images/soc/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
