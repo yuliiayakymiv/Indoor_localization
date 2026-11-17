@@ -47,6 +47,28 @@ config IL_NUM_BEACONS
 	default 3
 	range 1 4
 
+config IL_BEACON_ID
+	int "Role of this board: 0 = mobile node, 1..4 = beacon IL_B<id>"
+	default 0
+	range 0 4
+	help
+	  0 builds the mobile node (drone). 1..4 builds a beacon: at boot it measures the
+	  distance to every beacon with a higher id, then advertises as IL_B<id> (with the
+	  measured distances) and answers the mobile node as a CS reflector.
+	  A beacon build also needs -DEXTRA_CONF_FILE=beacon.conf.
+
+config IL_AUTO_LAYOUT
+	bool "Build the coordinate plane from the distances measured by the beacons"
+	default y
+	help
+	  y: the mobile node waits until the beacons have measured the distances between
+	  each other and builds the coordinate plane from them.
+	  n: the distances are the BEACON_Dxx_MM constants in src/main.c.
+
+config IL_RAW_OUTPUT
+	bool "Print a $RAW line with the uncalibrated distance estimates (for calibration)"
+	default n
+
 config IL_SAMPLES_PER_TURN
 	int "CS distance estimates to collect from a beacon before switching to the next one"
 	default 3
