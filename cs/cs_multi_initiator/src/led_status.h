@@ -11,6 +11,7 @@ enum led_status {
 	LED_STATUS_MEASURING, /* fast blink, 5 Hz: beacon measures the other beacons */
 	LED_STATUS_LINKED,    /* blink, 1 Hz: drone with all beacons connected */
 	LED_STATUS_CONNECTED, /* short flash once a second: beacon with a connection */
+	LED_STATUS_OFF,       /* off: going to sleep (sleep button) */
 };
 
 /* Call once after dk_leds_init(). Starts with LED_STATUS_ON. */

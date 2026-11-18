@@ -107,6 +107,14 @@ The user LED is on as soon as the firmware runs, so a dark LED means no power (o
 The charge LED next to it is driven by the charger chip, not by the firmware: it is only lit
 while the battery charges from USB.
 
+### Sleep button
+
+A button between **D0** and **GND** (pin set in `boards/xiao_nrf54l15_nrf54l15_cpuapp.overlay`).
+Press and release: the LED goes off and the board sleeps (System OFF, a few uA). Press again:
+the board wakes up and starts from the beginning, like after power-on (a beacon measures the
+other beacons again). Works on every build (beacons and mobile node); without a button nothing
+happens. Turn it off with `-DCONFIG_IL_SLEEP_BUTTON=n`.
+
 Mobile node:
 
     west build -b xiao_nrf54l15/nrf54l15/cpuapp --pristine

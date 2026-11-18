@@ -14,6 +14,7 @@ static const uint16_t pattern[][2] = {
 	[LED_STATUS_MEASURING] = {100, 100},
 	[LED_STATUS_LINKED] = {500, 500},
 	[LED_STATUS_CONNECTED] = {100, 900},
+	[LED_STATUS_OFF] = {0, 0},
 };
 
 static atomic_t current = ATOMIC_INIT(LED_STATUS_ON);
@@ -25,6 +26,12 @@ static K_WORK_DELAYABLE_DEFINE(led_work, led_work_handler);
 static void led_work_handler(struct k_work *work)
 {
 	enum led_status s = (enum led_status)atomic_get(&current);
+
+	if (s == LED_STATUS_OFF) {
+		led_on = false;
+		dk_set_led_off(STATUS_LED);
+		return;
+	}
 
 	if (s == LED_STATUS_ON) {
 		led_on = true;
@@ -39,6 +46,9 @@ static void led_work_handler(struct k_work *work)
 
 void led_status_set(enum led_status status)
 {
+	if (atomic_get(&current) == LED_STATUS_OFF) {
+		return; /* going to sleep: keep it off */
+	}
 	if (atomic_set(&current, status) == status) {
 		return; /* no change, keep the running pattern */
 	}

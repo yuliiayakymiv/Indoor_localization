@@ -1,0 +1,9 @@
+/*
+ * Sleep button: between D0 (P1.04) and GND. Press it to put the board to sleep
+ * (System OFF), press again to wake it up. See src/sleep_button.c.
+ */
+/ {
+	zephyr,user {
+		sleep-button-gpios = <&xiao_d 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+	};
+};

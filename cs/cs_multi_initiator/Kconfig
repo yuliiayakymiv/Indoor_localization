@@ -74,6 +74,15 @@ config IL_EXTERNAL_ANTENNA
 	  plugged in. n: the onboard ceramic antenna. See src/antenna.c.
 	  The distance calibration in src/main.c was fitted with onboard antennas.
 
+config IL_SLEEP_BUTTON
+	bool "Sleep button on D0 (to GND): press to sleep, press again to wake up"
+	default y
+	select GPIO
+	select POWEROFF
+	help
+	  See src/sleep_button.c. The pin is set in boards/xiao_nrf54l15_nrf54l15_cpuapp.overlay.
+	  Without a button the pin is only pulled up and nothing happens.
+
 config IL_RAW_OUTPUT
 	bool "Print a $RAW line with the uncalibrated distance estimates (for calibration)"
 	default n
