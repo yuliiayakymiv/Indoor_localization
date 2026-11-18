@@ -148,13 +148,17 @@ static bool layout_valid;
 /* Mobile node: the layout is final, beacons may be connected */
 static bool layout_ready;
 
-/* ---- Distance calibration (copied from ../cs_initiator, see the comment there) ----
+/* ---- Distance calibration ----
+ * IFFT re-fitted on 18.11.2026 with the external antennas and the 2048-point FFT:
+ * drone <-> IL_B3 at 0.5-4 m, 3 spots, data in calib_all.csv, tool calibrate.py
+ * (fit error ~9 cm). Phase and RTT were worse / mostly unavailable, so weight 0.
+ * Old values: IFFT 1.30 / 0.70, weights IFFT 0.5, RTT 0.5.
  * Actual_distance = (Raw_measurement - OFFSET) / SLOPE
  * Fitted on two XIAO nRF54L15 boards; re-measure if the hardware changes.
  */
-#define IFFT_SLOPE           (1.30f)
-#define IFFT_OFFSET_M        (0.70f)
-#define IFFT_WEIGHT          (0.50f)
+#define IFFT_SLOPE           (1.301f)
+#define IFFT_OFFSET_M        (1.237f)
+#define IFFT_WEIGHT          (1.00f)
 
 #define PHASE_SLOPE_SLOPE    (1.786f)
 #define PHASE_SLOPE_OFFSET_M (1.307f)
@@ -162,7 +166,7 @@ static bool layout_ready;
 
 #define RTT_SLOPE            (2.35f)
 #define RTT_OFFSET_M         (4.05f)
-#define RTT_WEIGHT           (0.50f)
+#define RTT_WEIGHT           (0.00f)
 
 #define CHANNEL_INDEX_OFFSET (2)
 #define TONE_QI_OK_TONE_COUNT_THRESHOLD (15)
