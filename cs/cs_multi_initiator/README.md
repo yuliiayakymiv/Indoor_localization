@@ -19,7 +19,8 @@ Build); `../cs_reflector` is the older beacon that does not measure the other be
    links is not reliably scheduled).
 3. Distance = calibrated median of the last 5 estimates of that beacon
    (calibration constants are the ones from `../cs_initiator`).
-4. The LED is on when all beacons are connected and set up.
+4. The LED is on as soon as the board runs and blinks (1 Hz) when all beacons are connected
+   and set up (see "Status LED" below).
 
 5. After every round: 2D position with Sofia's trilateration (`../../trilateration`,
    `Trilateration::calculate_2d_position`, used as is through `src/trilat_bridge.cpp`).
@@ -89,9 +90,22 @@ Beacons, in this folder, one build folder per board (change the id):
 Output: `build_b1\cs_multi_initiator\zephyr\zephyr.hex`.
 
 A beacon build has no serial output (`CONFIG_SERIAL=n` in `beacon.conf`), so the beacons can
-run on a battery without USB. Check a beacon by its LED: blinking while it measures the other
-beacons at boot. To see its log for debugging, build it once without the two lines at the end
-of `beacon.conf`.
+run on a battery without USB. Check a beacon by its LED (see "Status LED" below). To see its
+log for debugging, build it once without the two lines at the end of `beacon.conf`.
+
+### Status LED
+
+The user LED is on as soon as the firmware runs, so a dark LED means no power (or no firmware).
+
+| Board  | LED                              | Meaning                                         |
+|--------|----------------------------------|-------------------------------------------------|
+| both   | steady on                        | running; beacon: advertising, waiting           |
+| beacon | fast blink (5 Hz)                | measuring the other beacons at boot             |
+| beacon | short flash once a second        | something is connected (the mobile node, or a beacon measuring it) |
+| mobile | blink (1 Hz)                     | all beacons connected and set up                |
+
+The charge LED next to it is driven by the charger chip, not by the firmware: it is only lit
+while the battery charges from USB.
 
 Mobile node:
 

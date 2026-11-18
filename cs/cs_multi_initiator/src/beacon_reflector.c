@@ -20,6 +20,7 @@
 #include <zephyr/sys/byteorder.h>
 #include <bluetooth/services/ras.h>
 #include <dk_buttons_and_leds.h>
+#include "led_status.h"
 
 #include "il_beacon.h"
 
@@ -29,7 +30,6 @@ LOG_MODULE_REGISTER(il_reflector, LOG_LEVEL_INF);
 BUILD_ASSERT(IS_ENABLED(CONFIG_BT_PERIPHERAL) && IS_ENABLED(CONFIG_BT_RAS_RRSP),
 	     "A beacon build needs -DEXTRA_CONF_FILE=beacon.conf");
 
-#define CON_STATUS_LED DK_LED1
 #define IL_BEACON_NAME "IL_B" STRINGIFY(CONFIG_IL_BEACON_ID)
 
 /* Up to 3 other beacons */
@@ -93,7 +93,7 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
 		bt_conn_unref(ref);
 	}
 
-	dk_set_led_on(CON_STATUS_LED);
+	led_status_set(LED_STATUS_CONNECTED);
 }
 
 static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
@@ -107,7 +107,7 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
 	bt_conn_unref(periph_conn);
 	periph_conn = NULL;
 
-	dk_set_led_off(CON_STATUS_LED);
+	led_status_set(LED_STATUS_ON);
 }
 
 static void recycled_cb(void)
@@ -152,7 +152,7 @@ void il_reflector_run(const uint8_t *dist_entries, size_t len)
 
 	LOG_INF("Beacon %s: advertising, waiting for the mobile node", IL_BEACON_NAME);
 
-	dk_set_led_off(CON_STATUS_LED);
+	led_status_set(LED_STATUS_ON);
 	reflector_active = true;
 	k_work_submit(&adv_work);
 

@@ -49,11 +49,11 @@
 #include "il_beacon.h"
 
 #include <dk_buttons_and_leds.h>
+#include "led_status.h"
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(app_main, LOG_LEVEL_INF);
 
-#define CON_STATUS_LED DK_LED1
 
 #define CS_CONFIG_ID 0
 
@@ -722,12 +722,8 @@ static void update_status_led(void)
 		return; /* the LED of a beacon is driven by its own role code */
 	}
 
-	/* LED on only when every beacon is connected and set up */
-	if (ready == NUM_BEACONS) {
-		dk_set_led_on(CON_STATUS_LED);
-	} else {
-		dk_set_led_off(CON_STATUS_LED);
-	}
+	/* steady while running, blinking when every beacon is connected and set up */
+	led_status_set(ready == NUM_BEACONS ? LED_STATUS_LINKED : LED_STATUS_ON);
 }
 
 static void connected_cb(struct bt_conn *conn, uint8_t err)
@@ -1638,17 +1634,17 @@ static uint16_t survey_beacon(struct beacon *b)
 	int n = 0;
 
 	memset(&b->de_buf, 0, sizeof(b->de_buf));
+	led_status_set(LED_STATUS_MEASURING);
 
 	for (int turn = 0; turn < SURVEY_MAX_TURNS && n < SURVEY_SAMPLES && b->conn; turn++) {
 		ranging_turn(b);
-		dk_set_led(CON_STATUS_LED, turn & 1); /* blinks while measuring */
 
 		if (b->status == IL_STATUS_OK) {
 			samples[n++] = b->distance_m;
 		}
 	}
 
-	dk_set_led_off(CON_STATUS_LED);
+	led_status_set(LED_STATUS_ON);
 
 	if (n < SURVEY_MIN_SAMPLES) {
 		LOG_WRN("B%u: only %d usable distances, measuring again later", b->id, n);
@@ -1710,6 +1706,7 @@ int main(void)
 	LOG_INF("Indoor localization: multi-beacon CS initiator, %d beacons", NUM_BEACONS);
 
 	dk_leds_init();
+	led_status_init(); /* LED on from here: the board has power and runs */
 
 	for (int i = 0; i < NUM_BEACONS; i++) {
 		beacons[i].id = i + 1;
