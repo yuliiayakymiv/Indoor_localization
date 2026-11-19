@@ -31,6 +31,7 @@ position is meant to be sent to the flight controller as MAVLink.
 | `CMakeLists.txt` (root) | Zephyr app that builds trilateration + MAVLink + UART together. |
 | `nRF54L15_files/` | Early test app (trilateration on the board). |
 | `tools/laptop_receiver.py` | Reads the board's serial port on a laptop (`pip install -r tools/requirements.txt`). |
+| `tools/mavlink_check.py` | Checks the MAVLink output on pins D6/D7 through a USB-UART adapter (decodes the packets, verifies checksums). |
 | `tools/map/` | Live map in the browser (laptop / Raspberry Pi server, open on a tablet): `python tools/map/map_server.py`. |
 
 After cloning, fetch the submodule:
