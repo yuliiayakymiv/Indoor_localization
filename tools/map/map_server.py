@@ -8,7 +8,8 @@ with the beacons and the current position. Open it from any device in the same n
 
 What it reads from the serial output:
     I: Beacon IL_B<n> at x=<mm> y=<mm> z=<mm> mm      beacon positions (built at boot)
-    I: Beacon layout: the distances do not form a triangle   layout failed
+    $BCN,<beacon>,<x_mm>,<y_mm>,<z_mm>*<XX>             the same, repeated every 5 rounds
+    E: Beacon layout: <reason>                          layout failed (also repeated)
     $RNG,<seq>,<t_ms>,<beacon>,<dist_mm>,<status>*<XX>       distance to one beacon
     $POS,<seq>,<t_ms>,<x_mm>,<y_mm>,<z_mm>,<status>*<XX>     position
 Lines with a wrong checksum are ignored. A "*** Booting" line (board restart) clears the map.
@@ -146,6 +147,15 @@ def handle_line(line):
                 with STATE.lock:
                     STATE.ranges[str(rng["beacon"])] = rng
                 STATE.publish({"type": "rng", "rng": rng})
+            elif f[0] == "BCN" and len(f) >= 5:
+                bid = str(int(f[1]))
+                beacon = {"x": int(f[2]), "y": int(f[3]), "z": int(f[4])}
+                with STATE.lock:
+                    changed = STATE.beacons.get(bid) != beacon or STATE.layout_error
+                    STATE.beacons[bid] = beacon
+                    STATE.layout_error = None
+                if changed:
+                    STATE.publish({"type": "beacon", "id": bid, "beacon": beacon})
         except (ValueError, IndexError):
             pass
         return

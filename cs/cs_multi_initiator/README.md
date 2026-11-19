@@ -81,6 +81,14 @@ Once per round:
 `2` beacons on one line, the beacon distances do not form a triangle, or the calculation
 failed (then x, y are 0).
 
+## Beacon layout message
+Right after the layout is built and then every 5 rounds (~25 s), one line per beacon, so a
+reader started later (the map, `../../tools/map`) still gets the beacon coordinates:
+
+    $BCN,<beacon_id>,<x_mm>,<y_mm>,<z_mm>*<XX>
+
+If the layout could not be built, `E: Beacon layout: <reason>` is repeated instead.
+
 ## Measurement message (NRF-02)
 One line per beacon per round, NMEA-style:
 

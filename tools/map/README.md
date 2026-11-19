@@ -16,7 +16,8 @@ It prints the addresses to open, for example `http://192.168.1.23:8000`. Change 
 `--http-port`.
 
 What the map shows:
-- beacons `B1..B3` at the coordinates the mobile node prints at boot (`Beacon IL_B<n> at x=...`);
+- beacons `B1..B3` at the coordinates the mobile node prints at boot (`Beacon IL_B<n> at x=...`)
+  and repeats every 5 rounds (`$BCN`), so the map can be opened at any time;
 - the current position from `$POS` (green; grey when there was no new position for 12 s)
   and its trail;
 - a circle around each beacon with its last distance from `$RNG` (can be turned off);
@@ -24,8 +25,7 @@ What the map shows:
 
 The server reads the text console, so the mobile node must print it on the port the server
 opens (USB by default). Only one program can open a serial port: close other serial
-terminals first. Restart the mobile node after starting the server, or the beacon
-coordinates (printed once at boot) are missing.
+terminals first. The beacons appear within ~25 s after the server starts (next `$BCN`).
 
 Network notes:
 - Windows asks whether Python may accept connections: allow it for private networks.

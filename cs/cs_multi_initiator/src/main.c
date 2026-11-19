@@ -1457,6 +1457,9 @@ enum il_pos_status {
 
 static uint32_t pos_seq;
 
+/* Why the layout could not be built (NULL = built), repeated by print_layout(). */
+static const char *layout_error;
+
 /**
  * @brief Build the coordinate plane (beacon_xy_mm) from beacon_dist_mm.
  *
@@ -1479,14 +1482,16 @@ static void beacon_layout_build(void)
 		float y3_sq;
 
 		if (d12 <= 0.0f) {
-			LOG_ERR("Beacon layout: the B1-B2 distance is missing");
+			layout_error = "the B1-B2 distance is missing";
+			LOG_ERR("Beacon layout: %s", layout_error);
 			return;
 		}
 
 		x3 = (d12 * d12 + d13 * d13 - d23 * d23) / (2.0f * d12);
 		y3_sq = d13 * d13 - x3 * x3;
 		if (y3_sq <= 0.0f) {
-			LOG_ERR("Beacon layout: the distances do not form a triangle");
+			layout_error = "the distances do not form a triangle";
+			LOG_ERR("Beacon layout: %s", layout_error);
 			return;
 		}
 		y3 = sqrtf(y3_sq);
@@ -1515,10 +1520,34 @@ static void beacon_layout_build(void)
 	}
 
 	layout_valid = true;
+	layout_error = NULL;
 
 	for (int i = 0; i < NUM_BEACONS; i++) {
 		LOG_INF("Beacon IL_B%d at x=%d y=%d z=%d mm", i + 1, beacon_xy_mm[i][0],
 			beacon_xy_mm[i][1], beacon_z_mm[i]);
+	}
+}
+
+/**
+ * @brief Repeat the beacon layout for a reader that started after the boot log (map server).
+ *
+ *   $BCN,<beacon_id>,<x_mm>,<y_mm>,<z_mm>*<XX>     one line per beacon
+ *
+ * If the layout could not be built, the "Beacon layout: ..." error is repeated instead.
+ */
+static void print_layout(void)
+{
+	char body[48];
+
+	if (!layout_valid) {
+		LOG_ERR("Beacon layout: %s", layout_error ? layout_error : "not built");
+		return;
+	}
+
+	for (int i = 0; i < NUM_BEACONS; i++) {
+		snprintk(body, sizeof(body), "BCN,%d,%d,%d,%d", i + 1, beacon_xy_mm[i][0],
+			 beacon_xy_mm[i][1], beacon_z_mm[i]);
+		printk("$%s*%02X\r\n", body, nmea_checksum(body));
 	}
 }
 
@@ -1887,7 +1916,12 @@ int main(void)
 
 	LOG_INF("%d of %d beacons connected, starting ranging", connected_count(), NUM_BEACONS);
 
-	while (true) {
+	for (uint32_t round = 0;; round++) {
+		/* Beacon layout once every 5 rounds (~25 s), for readers started later */
+		if (round % 5 == 0) {
+			print_layout();
+		}
+
 		/* Round-robin over all beacons */
 		for (int i = 0; i < NUM_BEACONS; i++) {
 			struct beacon *b = &beacons[i];
