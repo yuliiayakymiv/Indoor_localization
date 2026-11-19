@@ -22,9 +22,21 @@ Build); `../cs_reflector` is the older beacon that does not measure the other be
 4. The LED is on as soon as the board runs and blinks (1 Hz) when all beacons are connected
    and set up (see "Status LED" below).
 
-5. After every round: 2D position with Sofia's trilateration (`../../trilateration`,
-   `Trilateration::calculate_2d_position`, used as is through `src/trilat_bridge.cpp`).
-   The 3D CS distance is first reduced to the floor plane with the beacon/mobile heights.
+5. Every result of a turn goes through the distance filter `src/cs_pos.c`: a single spike
+   (more than 0.3 m from the median of the beacon's last 5 accepted distances) is dropped,
+   two consistent jumps in a row are taken as real movement, and after a timeout the last
+   distance is kept for up to 10 s, so one missed turn does not lose the position.
+6. After every round: 2D position from the filtered distances with Sofia's trilateration
+   (`../../trilateration`, `Trilateration::calculate_2d_position`, used as is through
+   `src/trilat_bridge.cpp`). The 3D CS distance is first reduced to the floor plane with the
+   beacon/mobile heights. The `$RNG` lines stay unfiltered (one per turn).
+7. MAVLink (`CONFIG_IL_MAVLINK`, on by default for the mobile node): HEARTBEAT once a second
+   and VISION_POSITION_ESTIMATE after every position, MAVLink v2 on pins D6 (TX) / D7 (RX),
+   115200 baud, made by `../../mavlink/mavlink_packer.cpp` (`src/mavlink_bridge.cpp`). The text
+   output stays on USB. Needs the submodule: `git submodule update --init lib/mavlink`.
+   Before connecting a flight controller, check in the packer: the y axis (only z is
+   negated for NED, our plane is z up / y counter-clockwise), the system / component id of the
+   heartbeat (now the same as an autopilot), and the rate (one position per round, ~4-5 s).
 
 ## Beacon layout and coordinate plane
 The coordinate plane is built from the distances **between** the beacons:
@@ -36,12 +48,23 @@ The coordinate plane is built from the distances **between** the beacons:
 Seen from above, `IL_B1` → `IL_B2` → `IL_B3` must go counter-clockwise, otherwise y is mirrored.
 
 **Automatic (default, `CONFIG_IL_AUTO_LAYOUT=y`).** At boot every beacon measures the distance
-to each beacon with a higher id (B1 → B2, B3; B2 → B3), one at a time, median of 10 CS
-results, LED blinking. It then puts the results in its advertisement (manufacturer data,
+to each beacon with a higher id (B1 → B2, B3; B2 → B3), one at a time, LED blinking. The
+distances to one peer are pooled over several separate connections (one per ranging turn,
+up to 40); it stops when it has 20 with a spread (interquartile range) of at most 0.3 m, and
+the result is the median. It then puts the results in its advertisement (manufacturer data,
 company id 0xFFFF, entries `<peer id><distance mm, 2 bytes LE>`, see `src/il_beacon.h`) and
 becomes a normal CS reflector. The mobile node only scans until it has all distances, logs
-`Beacon distances: ...` and the beacon coordinates, and then connects. Start order: reset the
+`Beacon distances: ...` and the beacon coordinates, and then connects. While it waits it logs
+every 5 s which pairs are still missing and which beacons it hears. Start order: reset the
 beacons, then the mobile node. After moving a beacon, reset all boards.
+
+One bad link does not block the system forever:
+- a peer that was connected 4 times without enough distances is given up;
+- after 4 minutes the beacon advertises what it has measured (so the lower-id beacons can
+  measure it), and if a distance is missing it reboots 90 s later to measure again;
+- if the measurement hangs, a timer reboots the beacon;
+- a reflector checks every 2 s that it advertises (a single failed restart after a
+  disconnect used to leave a beacon invisible until it was power-cycled).
 
 **Manual (`-DCONFIG_IL_AUTO_LAYOUT=n`, mobile node only).** The distances are
 `BEACON_D12_MM`, `BEACON_D13_MM`, `BEACON_D23_MM` at the top of `src/main.c` (tape measure).
@@ -91,7 +114,9 @@ Output: `build_b1\cs_multi_initiator\zephyr\zephyr.hex`.
 
 A beacon build has no serial output (`CONFIG_SERIAL=n` in `beacon.conf`), so the beacons can
 run on a battery without USB. Check a beacon by its LED (see "Status LED" below). To see its
-log for debugging, build it once without the two lines at the end of `beacon.conf`.
+log for debugging (on USB only, not on the battery), add `log_on.conf`:
+
+    west build -b xiao_nrf54l15/nrf54l15/cpuapp -d b1log --pristine -- "-DEXTRA_CONF_FILE=beacon.conf;log_on.conf" -DCONFIG_IL_BEACON_ID=1
 
 ### Status LED
 

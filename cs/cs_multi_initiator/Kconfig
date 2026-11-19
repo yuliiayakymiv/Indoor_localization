@@ -87,6 +87,16 @@ config IL_RAW_OUTPUT
 	bool "Print a $RAW line with the uncalibrated distance estimates (for calibration)"
 	default n
 
+config IL_MAVLINK
+	bool "Send the position as MAVLink on pins D6 (TX) / D7 (RX)"
+	default y if IL_BEACON_ID = 0
+	depends on SERIAL
+	help
+	  Mobile node: HEARTBEAT once a second and VISION_POSITION_ESTIMATE after every
+	  position, MAVLink v2, on uart21 (115200 baud). The text output stays on the console.
+	  Uses ../../mavlink/mavlink_packer.cpp and the lib/mavlink submodule
+	  (git submodule update --init lib/mavlink).
+
 config IL_SAMPLES_PER_TURN
 	int "CS distance estimates to collect from a beacon before switching to the next one"
 	default 3

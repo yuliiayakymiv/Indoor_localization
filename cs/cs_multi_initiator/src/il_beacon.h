@@ -5,6 +5,7 @@
 #ifndef IL_BEACON_H_
 #define IL_BEACON_H_
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -24,5 +25,8 @@
  * @param len           Length of dist_entries in bytes (0 if nothing was measured).
  */
 void il_reflector_run(const uint8_t *dist_entries, size_t len);
+
+/** @brief true while a mobile node or another beacon is connected to this reflector. */
+bool il_reflector_busy(void);
 
 #endif /* IL_BEACON_H_ */

@@ -17,4 +17,19 @@ target_sources(app PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}/../../trilateration/trilateration.cpp
 )
 target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../trilateration)
+
+if(CONFIG_IL_MAVLINK)
+  set(MAVLINK_LIB ${CMAKE_CURRENT_LIST_DIR}/../../lib/mavlink)
+  if(NOT EXISTS ${MAVLINK_LIB}/common/mavlink.h)
+    message(FATAL_ERROR "lib/mavlink is empty: run 'git submodule update --init lib/mavlink'")
+  endif()
+  # The team's MAVLink packer, used as is
+  target_sources(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../mavlink/mavlink_packer.cpp)
+  target_include_directories(app PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../mavlink
+    ${MAVLINK_LIB}
+  )
+  # MAVLink headers use packed structs; silence the noisy GCC warning
+  target_compile_options(app PRIVATE -Wno-address-of-packed-member)
+endif()
 # NORDIC SDK APP END

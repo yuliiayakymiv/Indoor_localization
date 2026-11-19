@@ -139,6 +139,11 @@ BT_CONN_CB_DEFINE(reflector_conn_cb) = {
 	.le_cs_config_complete = config_create_cb,
 };
 
+bool il_reflector_busy(void)
+{
+	return periph_conn != NULL;
+}
+
 void il_reflector_run(const uint8_t *dist_entries, size_t len)
 {
 	int err;
@@ -159,7 +164,15 @@ void il_reflector_run(const uint8_t *dist_entries, size_t len)
 	while (true) {
 		struct bt_conn *conn;
 
-		k_msgq_get(&new_conn_q, &conn, K_FOREVER);
+		/* Every 2 s without a new connection: make sure the beacon advertises. The
+		 * restart in recycled_cb() is a single attempt; if it fails (or the event is
+		 * missed) the beacon would stay invisible until a reboot. adv_work does nothing
+		 * while connected, and -EALREADY (already advertising) is ignored.
+		 */
+		if (k_msgq_get(&new_conn_q, &conn, K_SECONDS(2)) != 0) {
+			k_work_submit(&adv_work);
+			continue;
+		}
 
 		const struct bt_le_cs_set_default_settings_param default_settings = {
 			.enable_initiator_role = false,

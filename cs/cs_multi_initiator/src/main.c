@@ -37,6 +37,7 @@
 #include <zephyr/types.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/printk.h>
+#include <zephyr/sys/reboot.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/cs.h>
 #include <zephyr/bluetooth/gatt.h>
@@ -47,6 +48,8 @@
 
 #include "trilat_bridge.h"
 #include "il_beacon.h"
+#include "cs_pos.h"
+#include "mavlink_bridge.h"
 
 #include <dk_buttons_and_leds.h>
 #include "led_status.h"
@@ -956,6 +959,12 @@ static void record_beacon_distances(int id, const uint8_t *entries, uint8_t len)
 	}
 }
 
+/* Mobile node, while waiting for the layout: RSSI of the last advertisement of each
+ * beacon since the last log line (5 s), 0 = not heard. Beacons advertise only after (or, for the
+ * highest id, without) measuring the others.
+ */
+static int8_t adv_seen_rssi[MAX_BEACONS];
+
 static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 			 struct net_buf_simple *ad)
 {
@@ -975,6 +984,7 @@ static void device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 	}
 
 	if (!IS_BEACON && IS_ENABLED(CONFIG_IL_AUTO_LAYOUT)) {
+		adv_seen_rssi[id - 1] = rssi; /* for the "Waiting for the beacons" log */
 		if (adv.dist != NULL) {
 			record_beacon_distances(id, adv.dist, adv.dist_len);
 		}
@@ -1404,24 +1414,34 @@ static void print_measurement(const struct beacon *b)
  * @brief Latest distances for the trilateration step.
  *
  * @param dist_m   Output, NUM_BEACONS entries, index i = beacon id i+1 (meters).
- * @param valid    Output, true if dist_m[i] is fresh (status OK and not older than
- *                 DISTANCE_MAX_AGE_MS).
+ * @param valid    Output, true if the beacon has a filtered distance (cs_pos: median of
+ *                 the accepted results, outliers rejected). After a timeout the last
+ *                 value is kept for CS_POS_MAX_AGE_MS, so one missed turn does not
+ *                 drop the position.
  * @return number of valid distances.
  */
+static cs_pos_t pos_filter;
+
 static int il_get_distances(float dist_m[NUM_BEACONS], bool valid[NUM_BEACONS])
 {
-	uint32_t now = k_uptime_get_32();
+	int64_t now = k_uptime_get();
 	int n = 0;
 
 	for (int i = 0; i < NUM_BEACONS; i++) {
-		const struct beacon *b = &beacons[i];
-
-		valid[i] = b->status == IL_STATUS_OK && b->updated_ms != 0 &&
-			   (now - b->updated_ms) <= DISTANCE_MAX_AGE_MS;
-		dist_m[i] = valid[i] ? b->distance_m : NAN;
+		valid[i] = cs_pos_dist(&pos_filter, i, now, &dist_m[i]);
+		if (!valid[i]) {
+			dist_m[i] = NAN;
+		}
 		n += valid[i] ? 1 : 0;
 	}
 	return n;
+}
+
+/* Feed the result of one ranging turn into the distance filter. */
+static void il_filter_add(const struct beacon *b)
+{
+	cs_pos_add(&pos_filter, b->id - 1, b->status == IL_STATUS_OK, b->distance_m,
+		   k_uptime_get());
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1540,6 +1560,12 @@ static void wait_for_layout(void)
 		if (++seconds % 5 == 0) {
 			LOG_INF("Waiting for the beacons to measure each other: %d of %d "
 				"distances received", layout_pairs_known(&total), total);
+			/* which pairs are still missing (0 = not received yet) */
+			LOG_INF("  B1-B2 %u, B1-B3 %u, B2-B3 %u mm", beacon_dist_mm[0][1],
+				beacon_dist_mm[0][2], beacon_dist_mm[1][2]);
+			LOG_INF("  heard (RSSI, 0 = not heard): B1 %d, B2 %d, B3 %d",
+				adv_seen_rssi[0], adv_seen_rssi[1], adv_seen_rssi[2]);
+			memset(adv_seen_rssi, 0, sizeof(adv_seen_rssi));
 		}
 	}
 }
@@ -1590,6 +1616,7 @@ static void compute_and_print_position(void)
 	if (status == IL_POS_OK) {
 		x_mm = (int32_t)lroundf(x_m * 1000.0f);
 		y_mm = (int32_t)lroundf(y_m * 1000.0f);
+		il_mavlink_send_position(x_m, y_m, 0.0f); /* z = 0 for the 2D demo */
 	}
 
 	/* z is 0 for the 2D demo */
@@ -1604,10 +1631,54 @@ static void compute_and_print_position(void)
 
 #if IS_BEACON
 
-/* Distances (one per ranging turn) used for one beacon-to-beacon measurement */
-#define SURVEY_SAMPLES     (10)
-#define SURVEY_MIN_SAMPLES (5)
-#define SURVEY_MAX_TURNS   (25)
+/* ---- Beacon-to-beacon measurement at boot ----
+ *
+ * Distances to one peer are pooled over several separate connections ("attempts"),
+ * one distance per ranging turn. The result is the median of the pool. A peer is done when
+ *   - the pool has SURVEY_TARGET_SAMPLES distances and their spread (interquartile range)
+ *     is at most SURVEY_MAX_SPREAD_MM, or
+ *   - the pool is full (SURVEY_MAX_SAMPLES), or
+ *   - SURVEY_MAX_ATTEMPTS connections were used (then it needs SURVEY_MIN_SAMPLES, or the
+ *     peer is given up).
+ * A peer that is not found (it is still measuring its own peers, so it does not advertise)
+ * does not use up attempts; the beacon keeps looking for it until SURVEY_DEADLINE_MS.
+ *
+ * Nothing can block the system forever:
+ *   - after SURVEY_DEADLINE_MS the beacon advertises what it has (lower-id beacons can then
+ *     measure it), and if a distance is missing it reboots after SURVEY_RETRY_REBOOT_MS to
+ *     measure again;
+ *   - if the survey thread hangs, a timer reboots the board after SURVEY_HANG_REBOOT_MS.
+ */
+#define SURVEY_TARGET_SAMPLES   (20)
+#define SURVEY_MAX_SAMPLES      (40)
+#define SURVEY_MIN_SAMPLES      (8)
+#define SURVEY_TURNS_PER_ATTEMPT (15)
+#define SURVEY_MAX_ATTEMPTS     (4)
+#define SURVEY_MAX_SPREAD_MM    (300)
+#define SURVEY_DEADLINE_MS      (4 * 60 * 1000)
+#define SURVEY_HANG_REBOOT_MS   (SURVEY_DEADLINE_MS + 90 * 1000)
+#define SURVEY_RETRY_REBOOT_MS  (90 * 1000)
+
+struct survey_peer {
+	float pool[SURVEY_MAX_SAMPLES];
+	int n;
+	int attempts;      /* connections used */
+	bool done;
+	uint16_t mm;       /* result, 0 = failed */
+};
+
+static void reboot_timer_cb(struct k_timer *t)
+{
+	/* Do not cut off a beacon or the mobile node that is ranging with us right now */
+	if (t != NULL && il_reflector_busy()) {
+		k_timer_start(t, K_SECONDS(10), K_NO_WAIT);
+		return;
+	}
+	sys_reboot(SYS_REBOOT_COLD);
+}
+
+K_TIMER_DEFINE(survey_hang_timer, reboot_timer_cb, NULL);
+K_TIMER_DEFINE(survey_retry_timer, reboot_timer_cb, NULL);
 
 /* Disconnects a beacon link (if any) and waits until it is really gone. */
 static void disconnect_and_wait(struct beacon *b)
@@ -1623,75 +1694,137 @@ static void disconnect_and_wait(struct beacon *b)
 	}
 }
 
-/**
- * @brief Measure the distance to one connected beacon.
- *
- * @return median of SURVEY_SAMPLES distances in mm, 0 if the measurement failed.
- */
-static uint16_t survey_beacon(struct beacon *b)
+/* One connection to the peer: add up to SURVEY_TURNS_PER_ATTEMPT distances to the pool. */
+static void survey_attempt(struct beacon *b, struct survey_peer *p)
 {
-	static float samples[SURVEY_SAMPLES];
-	int n = 0;
+	int added = 0;
 
 	memset(&b->de_buf, 0, sizeof(b->de_buf));
 	led_status_set(LED_STATUS_MEASURING);
 
-	for (int turn = 0; turn < SURVEY_MAX_TURNS && n < SURVEY_SAMPLES && b->conn; turn++) {
+	for (int turn = 0; turn < SURVEY_TURNS_PER_ATTEMPT && p->n < SURVEY_MAX_SAMPLES &&
+			   b->conn; turn++) {
 		ranging_turn(b);
 
 		if (b->status == IL_STATUS_OK) {
-			samples[n++] = b->distance_m;
+			p->pool[p->n++] = b->distance_m;
+			added++;
 		}
 	}
 
 	led_status_set(LED_STATUS_ON);
+	LOG_INF("B%u: attempt %d: %d distances (%d in total)", b->id, p->attempts, added, p->n);
+}
 
-	if (n < SURVEY_MIN_SAMPLES) {
-		LOG_WRN("B%u: only %d usable distances, measuring again later", b->id, n);
-		return 0;
+/* Decide if the peer is measured well enough; sets p->done and p->mm. */
+static void survey_evaluate(struct beacon *b, struct survey_peer *p)
+{
+	static float sorted[SURVEY_MAX_SAMPLES];
+
+	if (p->n == 0) {
+		if (p->attempts >= SURVEY_MAX_ATTEMPTS) {
+			p->done = true;
+			LOG_WRN("B%u: no distance after %d connections, giving up", b->id,
+				p->attempts);
+		}
+		return;
 	}
 
-	return (uint16_t)CLAMP(lroundf(median_inplace(n, samples) * 1000.0f), 1, UINT16_MAX);
+	memcpy(sorted, p->pool, p->n * sizeof(float));
+	const float med = median_inplace(p->n, sorted); /* sorts `sorted` */
+	const float q1 = sorted[p->n / 4];
+	const float q3 = sorted[(3 * p->n) / 4];
+	const int spread_mm = (int)lroundf((q3 - q1) * 1000.0f);
+
+	LOG_INF("B%u: %d distances, median %d mm, quartiles %d..%d mm (spread %d mm)", b->id,
+		p->n, (int)lroundf(med * 1000.0f), (int)lroundf(q1 * 1000.0f),
+		(int)lroundf(q3 * 1000.0f), spread_mm);
+
+	const bool good = p->n >= SURVEY_TARGET_SAMPLES && spread_mm <= SURVEY_MAX_SPREAD_MM;
+	const bool out_of_tries = p->n >= SURVEY_MAX_SAMPLES || p->attempts >= SURVEY_MAX_ATTEMPTS;
+
+	if (!good && !out_of_tries) {
+		return; /* measure more */
+	}
+
+	p->done = true;
+	if (p->n < SURVEY_MIN_SAMPLES) {
+		LOG_WRN("B%u: only %d distances after %d connections, giving up", b->id, p->n,
+			p->attempts);
+		return;
+	}
+	if (!good) {
+		LOG_WRN("B%u: spread %d mm is above %d mm, using the median anyway", b->id,
+			spread_mm, SURVEY_MAX_SPREAD_MM);
+	}
+	p->mm = (uint16_t)CLAMP(lroundf(med * 1000.0f), 1, UINT16_MAX);
 }
 
 static void beacon_main(void)
 {
+	static struct survey_peer peers[MAX_BEACONS];
 	static uint8_t entries[(MAX_BEACONS - 1) * IL_ADV_ENTRY_LEN];
 	size_t len = 0;
 	int remaining = NUM_BEACONS - MY_BEACON_ID;
+	const int64_t deadline = k_uptime_get() + SURVEY_DEADLINE_MS;
 
 	LOG_INF("Beacon IL_B%d: measuring the distance to %d other beacon(s)", MY_BEACON_ID,
 		remaining);
+	k_timer_start(&survey_hang_timer, K_MSEC(SURVEY_HANG_REBOOT_MS), K_NO_WAIT);
 
-	/* One beacon at a time, and the link is closed right after the measurement, so the
-	 * other beacons (and later the mobile node) can use that beacon too.
+	/* One beacon at a time, and the link is closed after every attempt, so the other
+	 * beacons (and later the mobile node) can use that beacon too.
 	 */
-	while (remaining > 0) {
+	while (remaining > 0 && k_uptime_get() < deadline) {
 		for (int id = MY_BEACON_ID + 1; id <= NUM_BEACONS; id++) {
 			struct beacon *b = &beacons[id - 1];
-			uint16_t mm = 0;
+			struct survey_peer *p = &peers[id - 1];
 
-			if (beacon_dist_mm[MY_BEACON_ID - 1][id - 1] != 0) {
-				continue; /* already measured */
+			if (p->done) {
+				continue;
 			}
 
 			scan_target_id = id;
 			connect_one_missing_beacon(2000);
 
-			if (b->ready && b->conn) {
-				mm = survey_beacon(b);
+			if (b->conn != NULL) {
+				p->attempts++; /* found it: this connection counts */
+				if (b->ready) {
+					survey_attempt(b, p);
+				}
 			}
 			disconnect_and_wait(b);
+			survey_evaluate(b, p);
 
-			if (mm != 0) {
-				LOG_INF("Distance IL_B%d - IL_B%d: %u mm", MY_BEACON_ID, id, mm);
-				beacon_dist_mm[MY_BEACON_ID - 1][id - 1] = mm;
-				entries[len] = id;
-				sys_put_le16(mm, &entries[len + 1]);
-				len += IL_ADV_ENTRY_LEN;
+			if (p->done) {
 				remaining--;
 			}
 		}
+	}
+
+	k_timer_stop(&survey_hang_timer);
+
+	bool missing = false;
+
+	for (int id = MY_BEACON_ID + 1; id <= NUM_BEACONS; id++) {
+		const struct survey_peer *p = &peers[id - 1];
+
+		if (p->mm == 0) {
+			LOG_WRN("Distance IL_B%d - IL_B%d: not measured", MY_BEACON_ID, id);
+			missing = true;
+			continue;
+		}
+		LOG_INF("Distance IL_B%d - IL_B%d: %u mm", MY_BEACON_ID, id, p->mm);
+		beacon_dist_mm[MY_BEACON_ID - 1][id - 1] = p->mm;
+		entries[len] = id;
+		sys_put_le16(p->mm, &entries[len + 1]);
+		len += IL_ADV_ENTRY_LEN;
+	}
+
+	if (missing) {
+		LOG_WRN("Advertising what was measured; rebooting in %d s to measure again",
+			SURVEY_RETRY_REBOOT_MS / 1000);
+		k_timer_start(&survey_retry_timer, K_MSEC(SURVEY_RETRY_REBOOT_MS), K_NO_WAIT);
 	}
 
 	il_reflector_run(entries, len);
@@ -1707,6 +1840,7 @@ int main(void)
 
 	dk_leds_init();
 	led_status_init(); /* LED on from here: the board has power and runs */
+	(void)il_mavlink_init(); /* no-op without CONFIG_IL_MAVLINK (beacons) */
 
 	for (int i = 0; i < NUM_BEACONS; i++) {
 		beacons[i].id = i + 1;
@@ -1734,6 +1868,16 @@ int main(void)
 	beacon_layout_build();
 	layout_ready = true;
 
+	{
+		float xy_mm[NUM_BEACONS][2];
+
+		for (int i = 0; i < NUM_BEACONS; i++) {
+			xy_mm[i][0] = beacon_xy_mm[i][0];
+			xy_mm[i][1] = beacon_xy_mm[i][1];
+		}
+		cs_pos_init(&pos_filter, xy_mm, NUM_BEACONS);
+	}
+
 	/* Startup: wait (up to ~15 s) until every beacon is connected */
 	int64_t startup_deadline = k_uptime_get() + 15000;
 
@@ -1753,6 +1897,7 @@ int main(void)
 			} else {
 				b->status = IL_STATUS_NOT_CONNECTED;
 			}
+			il_filter_add(b);
 			print_measurement(b);
 		}
 
