@@ -31,6 +31,7 @@ position is meant to be sent to the flight controller as MAVLink.
 | `CMakeLists.txt` (root) | Zephyr app that builds trilateration + MAVLink + UART together. |
 | `nRF54L15_files/` | Early test app (trilateration on the board). |
 | `tools/laptop_receiver.py` | Reads the board's serial port on a laptop (`pip install -r tools/requirements.txt`). |
+| `tools/map/` | Live map in the browser (laptop / Raspberry Pi server, open on a tablet): `python tools/map/map_server.py`. |
 
 After cloning, fetch the submodule:
 
@@ -68,5 +69,8 @@ Message formats, the coordinate plane and all options:
 - **Accuracy is not good enough yet:** beacon-to-beacon distances are off by up to 0.8 m at
   1.4–3.8 m, and drone-to-beacon distances are 0.5–1 m too long. Next step is recalibrating
   the distance at known distances of 1–4 m.
-- The position is not yet sent over MAVLink from the CS firmware; `mavlink/` and `uart/` are
-  tested separately.
+- The CS firmware sends the position as MAVLink on pins D6/D7 (`VISION_POSITION_ESTIMATE` +
+  heartbeat, see `cs/cs_multi_initiator/README.md`); not tested with a flight controller yet.
+- Beacon-to-beacon distances also depend strongly on where the boards stand (reflections):
+  at some spots the error was ~0.8 m with a small spread. Calibration with the boards fixed
+  in one orientation is in progress.

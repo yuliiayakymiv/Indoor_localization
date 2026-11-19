@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Indoor map</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --line: #dfe3ea;
+    --grid: #eceff4; --axis: #b9c0cc; --beacon: #3b6fd8; --pos: #1f9d55; --pos-old: #9aa3b2;
+    --trail: rgba(31, 157, 85, .35); --range: rgba(59, 111, 216, .22); --warn-bg: #fff4e0;
+    --warn: #8a5a00; --bad: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b2029; --text: #e6e9ef; --muted: #8e97a8; --line: #2b3240;
+      --grid: #1f2530; --axis: #3a4354; --beacon: #6f9bff; --pos: #3ccf7a; --pos-old: #5c6577;
+      --trail: rgba(60, 207, 122, .35); --range: rgba(111, 155, 255, .25); --warn-bg: #3a2e14;
+      --warn: #f0c36a; --bad: #ff7b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .title { font-weight: 600; }
+  .pill { padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600;
+    background: var(--grid); color: var(--muted); }
+  .pill.live { background: color-mix(in srgb, var(--pos) 18%, transparent); color: var(--pos); }
+  .pill.stale { background: var(--warn-bg); color: var(--warn); }
+  .xy { font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 600; }
+  .muted { color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: 1fr 260px; min-height: 0; }
+  .mapwrap { position: relative; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  aside { background: var(--panel); border-left: 1px solid var(--line); padding: 14px 16px;
+    overflow: auto; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+    margin: 0 0 8px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums;
+    margin-bottom: 18px; }
+  td { padding: 5px 0; border-bottom: 1px solid var(--line); }
+  td:last-child { text-align: right; }
+  .bad { color: var(--bad); }
+  .banner { position: absolute; left: 12px; right: 12px; top: 12px; padding: 8px 12px;
+    border-radius: 8px; background: var(--warn-bg); color: var(--warn); font-size: 14px;
+    display: none; }
+  label { display: flex; gap: 8px; align-items: center; margin: 6px 0; font-size: 14px; }
+  button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); cursor: pointer; }
+  @media (max-width: 760px) {
+    main { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+    aside { border-left: 0; border-top: 1px solid var(--line); max-height: 38vh; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <span class="title">Indoor localization</span>
+    <span id="live" class="pill">немає з'єднання</span>
+    <span class="xy" id="xy">X —  Y —</span>
+    <span class="muted" id="posinfo"></span>
+    <span class="muted" id="source" style="margin-left:auto"></span>
+  </header>
+  <main>
+    <div class="mapwrap">
+      <canvas id="map"></canvas>
+      <div class="banner" id="banner"></div>
+    </div>
+    <aside>
+      <h2>Маяки</h2>
+      <table id="beacons"><tbody></tbody></table>
+      <h2>Показувати</h2>
+      <label><input type="checkbox" id="showRanges" checked> кола відстаней</label>
+      <label><input type="checkbox" id="showTrail" checked> слід</label>
+      <p><button id="clearTrail">Очистити слід</button></p>
+      <p class="muted" id="layoutinfo"></p>
+    </aside>
+  </main>
+</div>
+<script>
+(() => {
+  const S = { beacons: {}, pos: null, trail: [], ranges: {}, layout_error: null,
+              layout_info: null, source: "", lastMsg: 0 };
+  const cv = document.getElementById("map"), ctx = cv.getContext("2d");
+  const $ = id => document.getElementById(id);
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const fmtM = mm => (mm / 1000).toFixed(2);
+
+  function prefsLoad() {
+    try {
+      const p = JSON.parse(localStorage.getItem("ilmap") || "{}");
+      if ("ranges" in p) $("showRanges").checked = p.ranges;
+      if ("trail" in p) $("showTrail").checked = p.trail;
+    } catch (e) { /* storage blocked: keep defaults */ }
+  }
+  function prefsSave() {
+    try {
+      localStorage.setItem("ilmap", JSON.stringify(
+        { ranges: $("showRanges").checked, trail: $("showTrail").checked }));
+    } catch (e) { /* ignore */ }
+  }
+
+  // ---------- data ----------
+  function apply(m) {
+    S.lastMsg = Date.now();
+    switch (m.type) {
+      case "snapshot":
+        Object.assign(S, { beacons: m.beacons || {}, pos: m.pos, trail: m.trail || [],
+          ranges: m.ranges || {}, layout_error: m.layout_error, layout_info: m.layout_info,
+          source: m.source || "" });
+        // age of the last position by the server's clock (tablet and laptop clocks differ)
+        if (S.pos && m.server_time) S.pos.rxLocal = Date.now() - (m.server_time - S.pos.rx) * 1000;
+        break;
+      case "reset":
+        Object.assign(S, { beacons: {}, pos: null, trail: [], ranges: {},
+          layout_error: null, layout_info: null });
+        break;
+      case "beacon": S.beacons[m.id] = m.beacon; S.layout_error = null; break;
+      case "layout_error": S.layout_error = m.text; break;
+      case "layout_info": S.layout_info = m.text; break;
+      case "rng": S.ranges[String(m.rng.beacon)] = m.rng; break;
+      case "pos":
+        S.pos = m.pos;
+        S.pos.rxLocal = Date.now();
+        if (m.pos.status === 0) { S.trail.push([m.pos.x, m.pos.y]); S.trail = S.trail.slice(-200); }
+        break;
+      case "error": S.error = m.text; break;
+    }
+    renderPanel();
+    draw();
+  }
+
+  function connect() {
+    const es = new EventSource("events");
+    es.onmessage = e => { try { apply(JSON.parse(e.data)); } catch (err) { console.error(err); } };
+    es.onerror = () => { $("live").textContent = "перепідключення…"; $("live").className = "pill stale"; };
+  }
+
+  // ---------- side panel / header ----------
+  function renderPanel() {
+    $("source").textContent = S.source;
+    const ids = new Set([...Object.keys(S.beacons), ...Object.keys(S.ranges)]);
+    const rows = [...ids].sort().map(id => {
+      const r = S.ranges[id];
+      let v = "—", cls = "";
+      if (r) {
+        if (r.status === 0) v = fmtM(r.dist) + " м";
+        else { v = r.status_text; cls = "bad"; }
+      }
+      return `<tr><td>B${id}</td><td class="${cls}">${v}</td></tr>`;
+    });
+    $("beacons").tBodies[0].innerHTML = rows.join("") ||
+      `<tr><td class="muted">ще немає даних</td><td></td></tr>`;
+
+    const p = S.pos;
+    if (p && p.status === 0) {
+      $("xy").textContent = `X ${fmtM(p.x)}  Y ${fmtM(p.y)} м`;
+      $("posinfo").textContent = `#${p.seq}`;
+    } else if (p) {
+      $("posinfo").textContent = `#${p.seq}: ${p.status_text}`;
+    }
+    $("layoutinfo").textContent = S.layout_info ? "Відстані між маяками: " + S.layout_info : "";
+    const b = $("banner");
+    let msg = "";
+    if (S.layout_error) msg = "Розкладка маяків не побудована: " + S.layout_error +
+      ". Позиції не буде, поки маяки не переміряють одне одного.";
+    else if (!Object.keys(S.beacons).length) msg = "Чекаю координати маяків (вони друкуються на старті мобільного вузла).";
+    b.textContent = msg; b.style.display = msg ? "block" : "none";
+  }
+
+  function tickLive() {
+    const el = $("live");
+    const age = S.pos && S.pos.rxLocal ? (Date.now() - S.pos.rxLocal) / 1000 : null;
+    if (!S.lastMsg) { el.textContent = "немає з'єднання"; el.className = "pill"; }
+    else if (age === null) { el.textContent = "чекаю позицію"; el.className = "pill stale"; }
+    else if (age < 12) { el.textContent = "наживо"; el.className = "pill live"; }
+    else { el.textContent = `немає позиції ${Math.round(age)} с`; el.className = "pill stale"; }
+    draw();
+  }
+
+  // ---------- map ----------
+  let view = null; // {cx, cy, scale} world mm -> px
+  function fitView(w, h) {
+    const pts = Object.values(S.beacons).map(b => [b.x, b.y]);
+    S.trail.forEach(p => pts.push(p));
+    if (S.pos && S.pos.status === 0) pts.push([S.pos.x, S.pos.y]);
+    if (!pts.length) pts.push([0, 0], [3000, 2000]);
+    let minX = Math.min(...pts.map(p => p[0])), maxX = Math.max(...pts.map(p => p[0]));
+    let minY = Math.min(...pts.map(p => p[1])), maxY = Math.max(...pts.map(p => p[1]));
+    const pad = 600;
+    minX -= pad; maxX += pad; minY -= pad; maxY += pad;
+    const spanX = Math.max(maxX - minX, 2000), spanY = Math.max(maxY - minY, 2000);
+    const scale = Math.min(w / spanX, h / spanY);
+    return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, scale };
+  }
+
+  function draw() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    if (!w || !h) return;
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+      cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    view = fitView(w, h);
+    const X = x => w / 2 + (x - view.cx) * view.scale;
+    const Y = y => h / 2 - (y - view.cy) * view.scale;   // y up, like the beacon plane
+
+    // grid every 0.5 m, labels every 1 m
+    const x0 = view.cx - w / 2 / view.scale, x1 = view.cx + w / 2 / view.scale;
+    const y0 = view.cy - h / 2 / view.scale, y1 = view.cy + h / 2 / view.scale;
+    ctx.lineWidth = 1; ctx.font = "11px system-ui, sans-serif"; ctx.fillStyle = css("--muted");
+    for (let gx = Math.ceil(x0 / 500) * 500; gx <= x1; gx += 500) {
+      ctx.strokeStyle = gx === 0 ? css("--axis") : css("--grid");
+      ctx.beginPath(); ctx.moveTo(X(gx), 0); ctx.lineTo(X(gx), h); ctx.stroke();
+      if (gx % 1000 === 0) ctx.fillText((gx / 1000) + " м", X(gx) + 3, h - 6);
+    }
+    for (let gy = Math.ceil(y0 / 500) * 500; gy <= y1; gy += 500) {
+      ctx.strokeStyle = gy === 0 ? css("--axis") : css("--grid");
+      ctx.beginPath(); ctx.moveTo(0, Y(gy)); ctx.lineTo(w, Y(gy)); ctx.stroke();
+      if (gy % 1000 === 0 && gy !== 0) ctx.fillText((gy / 1000) + " м", 4, Y(gy) - 3);
+    }
+
+    // range circles (last OK distance of each beacon)
+    if ($("showRanges").checked) {
+      ctx.strokeStyle = css("--range"); ctx.lineWidth = 2;
+      for (const [id, r] of Object.entries(S.ranges)) {
+        const b = S.beacons[id];
+        if (!b || r.status !== 0) continue;
+        ctx.beginPath(); ctx.arc(X(b.x), Y(b.y), r.dist * view.scale, 0, 2 * Math.PI); ctx.stroke();
+      }
+    }
+
+    // trail
+    if ($("showTrail").checked && S.trail.length > 1) {
+      ctx.strokeStyle = css("--trail"); ctx.lineWidth = 2; ctx.beginPath();
+      S.trail.forEach((p, i) => i ? ctx.lineTo(X(p[0]), Y(p[1])) : ctx.moveTo(X(p[0]), Y(p[1])));
+      ctx.stroke();
+    }
+
+    // beacons
+    ctx.font = "600 13px system-ui, sans-serif";
+    for (const [id, b] of Object.entries(S.beacons)) {
+      const px = X(b.x), py = Y(b.y);
+      ctx.fillStyle = css("--beacon");
+      ctx.beginPath(); ctx.moveTo(px, py - 10); ctx.lineTo(px + 9, py + 7); ctx.lineTo(px - 9, py + 7);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = css("--text");
+      ctx.fillText("B" + id, px + 12, py + 4);
+    }
+
+    // current position
+    const p = S.pos;
+    let last = null;
+    if (p && p.status === 0) last = [p.x, p.y];
+    else if (S.trail.length) last = S.trail[S.trail.length - 1];
+    if (last) {
+      const fresh = p && p.status === 0 && p.rxLocal && Date.now() - p.rxLocal < 12000;
+      const c = fresh ? css("--pos") : css("--pos-old");
+      const px = X(last[0]), py = Y(last[1]);
+      ctx.fillStyle = c; ctx.globalAlpha = .2;
+      ctx.beginPath(); ctx.arc(px, py, 18, 0, 2 * Math.PI); ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.beginPath(); ctx.arc(px, py, 8, 0, 2 * Math.PI); ctx.fill();
+      ctx.strokeStyle = css("--panel"); ctx.lineWidth = 2; ctx.stroke();
+    }
+  }
+
+  $("showRanges").onchange = () => { prefsSave(); draw(); };
+  $("showTrail").onchange = () => { prefsSave(); draw(); };
+  $("clearTrail").onclick = () => { S.trail = []; draw(); };
+  window.addEventListener("resize", draw);
+  prefsLoad();
+  renderPanel();
+  connect();
+  setInterval(tickLive, 1000);
+})();
+</script>
+</body>
+</html>
