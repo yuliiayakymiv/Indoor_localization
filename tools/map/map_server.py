@@ -21,6 +21,7 @@ Usage:
     python map_server.py --port /dev/ttyACM0   # Raspberry Pi
     python map_server.py --replay run.log      # play back a saved log (no board needed)
     python map_server.py --demo                # made-up data (no board needed)
+    python map_server.py --port /dev/ttyACM0 --tcp 5000   # + the text of pi_receiver.py on :5000
 
 Only one program can open the serial port at a time: close other serial terminals first.
 """
@@ -96,6 +97,67 @@ class State:
 STATE = State()
 
 
+# --------------------------------------------------------------------------------------
+# Optional text output on a TCP port (--tcp), same lines as pi_receiver.py --rng --raw,
+# so a "Serial WiFi Terminal" on the tablet keeps working next to the map
+# --------------------------------------------------------------------------------------
+
+class TcpText:
+    def __init__(self, port):
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server.bind(("0.0.0.0", port))
+        self.server.listen(4)
+        self.clients = []
+        self.lock = threading.Lock()
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while True:
+            client, _ = self.server.accept()
+            client.setblocking(False)
+            with self.lock:
+                self.clients.append(client)
+
+    def send(self, text):
+        data = (text + "\r\n").encode()
+        with self.lock:
+            for client in self.clients[:]:
+                try:
+                    client.send(data)
+                except BlockingIOError:
+                    pass  # slow client: skip this line
+                except OSError:
+                    self.clients.remove(client)
+                    client.close()
+
+
+TCP = None  # TcpText when --tcp is given
+
+
+def tcp_text(kind, rec=None, line=None):
+    """Format like pi_receiver.py: positions, distances, and '# ' + other lines."""
+    if TCP is None:
+        return
+    if kind == "pos":
+        if rec["status"] != 0:
+            TCP.send(f"X=   ---   Y=   ---   [{POS_STATUS_TCP.get(rec['status'], rec['status'])}]"
+                     f"  t={rec['t_ms']} ms  #{rec['seq']}")
+        else:
+            TCP.send(f"X={rec['x']:7.1f}  Y={rec['y']:7.1f}  Z={rec['z']:5.1f}  "
+                     f"t={rec['t_ms']} ms  #{rec['seq']}")
+    elif kind == "rng":
+        if rec["status"] != 0:
+            TCP.send(f"    B{rec['beacon']}: [{RNG_STATUS.get(rec['status'], rec['status'])}]")
+        else:
+            TCP.send(f"    B{rec['beacon']}: {rec['dist'] / 1000:.2f} m")
+    elif kind == "raw" and line:
+        TCP.send(f"# {line}")
+
+
+POS_STATUS_TCP = {0: "OK", 1: "мало маяків", 2: "погана геометрія"}  # pi_receiver wording
+
+
 def nmea_ok(line):
     """True if the $...*XX checksum matches (XOR of everything between $ and *)."""
     if "*" not in line:
@@ -118,6 +180,7 @@ def handle_line(line):
     STATE.last_line_time = time.time()
 
     if "*** Booting" in line:
+        tcp_text("raw", line=line)
         with STATE.lock:
             src = STATE.source
             STATE.reset()
@@ -125,10 +188,11 @@ def handle_line(line):
         STATE.publish({"type": "reset"})
         return
 
-    if line.startswith("$"):
-        if not nmea_ok(line):
-            return
-        f = line[1:].split("*", 1)[0].split(",")
+    # A log line can be glued in front of a message: take the last '$'
+    start = line.rfind("$")
+    if start >= 0 and "*" in line[start:] and nmea_ok(line[start:]):
+        msg = line[start:]
+        f = msg[1:].split("*", 1)[0].split(",")
         try:
             if f[0] == "POS" and len(f) >= 7:
                 pos = {"seq": int(f[1]), "t_ms": int(f[2]), "x": int(f[3]), "y": int(f[4]),
@@ -140,6 +204,7 @@ def handle_line(line):
                         STATE.trail.append([pos["x"], pos["y"]])
                         del STATE.trail[:-TRAIL_LEN]
                 STATE.publish({"type": "pos", "pos": pos})
+                tcp_text("pos", pos)
             elif f[0] == "RNG" and len(f) >= 6:
                 rng = {"seq": int(f[1]), "t_ms": int(f[2]), "beacon": int(f[3]),
                        "dist": int(f[4]), "status": int(f[5]),
@@ -147,6 +212,7 @@ def handle_line(line):
                 with STATE.lock:
                     STATE.ranges[str(rng["beacon"])] = rng
                 STATE.publish({"type": "rng", "rng": rng})
+                tcp_text("rng", rng)
             elif f[0] == "BCN" and len(f) >= 5:
                 bid = str(int(f[1]))
                 beacon = {"x": int(f[2]), "y": int(f[3]), "z": int(f[4])}
@@ -159,6 +225,8 @@ def handle_line(line):
         except (ValueError, IndexError):
             pass
         return
+
+    tcp_text("raw", line=line)  # log lines and broken messages, like pi_receiver --raw
 
     m = RE_BEACON.search(line)
     if m:
@@ -368,8 +436,15 @@ def main():
     src.add_argument("--demo", action="store_true", help="made-up data, no board needed")
     ap.add_argument("--speed", type=float, default=1.0, help="replay speed (0 = no delays)")
     ap.add_argument("--http-port", type=int, default=8000)
+    ap.add_argument("--tcp", type=int, metavar="PORT",
+                    help="also send the text lines of pi_receiver.py (--rng --raw) on this TCP "
+                         "port, e.g. 5000, for a serial terminal app on the tablet")
     args = ap.parse_args()
     sys.stdout.reconfigure(line_buffering=True)  # show the URLs at once, also when piped
+
+    global TCP
+    if args.tcp:
+        TCP = TcpText(args.tcp)
 
     if args.demo:
         target, targs = run_demo, ()
@@ -383,6 +458,8 @@ def main():
     print(f"Map: http://localhost:{args.http_port}")
     for ip in lan_ips():
         print(f"     http://{ip}:{args.http_port}   (from a tablet / phone in the same Wi-Fi)")
+    if args.tcp:
+        print(f"Text lines (like pi_receiver.py) on TCP port {args.tcp}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

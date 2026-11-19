@@ -1,0 +1,13 @@
+[Unit]
+Description=Indoor localization live map (:8000) + text lines (:5000)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+ExecStart=/usr/bin/python3 /home/pi/tools/map/map_server.py --port /dev/ttyACM0 --tcp 5000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
