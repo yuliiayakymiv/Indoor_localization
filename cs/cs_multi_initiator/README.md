@@ -179,15 +179,21 @@ not `west flash`. For a beacon pass its hex:
 
 ## Status
 Compiles on NCS 3.4.2 for `xiao_nrf54l15/nrf54l15/cpuapp` (mobile node and beacons).
-Tested on hardware with 3 beacons on 16.11.2026:
-- the automatic layout works end to end; at short range (sides 0.6–1.1 m) `$POS` gave status 0;
-- **the beacon-to-beacon distances are not accurate enough yet**: with sides of about
-  1.4 / 3.8 / 3.8 m they came out as 1147 / 3019 / 4223 mm (errors up to 0.8 m, not a
-  triangle), so there was no position. Drone-to-beacon distances are stable (±5 cm on a good
-  link) but 0.5–1 m too long. Next step: recalibrate with `CONFIG_IL_RAW_OUTPUT=y` at known
-  distances of 1–4 m (the constants were fitted with the 512-point FFT at short range);
+Tested on hardware with 3 beacons, last on 19.11.2026 (details and numbers in the
+[top-level README](../../README.md#status-19-november-2026)):
+- automatic layout, ranging, filter, `$POS` and the map work end to end, also with the mobile
+  node on a car with a Raspberry Pi;
+- mobile-to-beacon distances ±0.10–0.26 m at 1–3 m with vertical antennas and nobody close by
+  (re-checked 19.11 at 1 / 1.5 / 2 / 2.5 / 3 m; the constants were left unchanged);
+- beacon-to-beacon distances 0.22–0.35 m short on a good placement, up to 1.2 m on a bad one;
+- after lost links one beacon can get stuck with `CS enable failed (err -13)` /
+  `status 0x0c` (re-plug the mobile node); to fix in `ranging_turn()`;
 - once `SoftDevice Controller ASSERT: 135, 301` (controller crash, the board reboots) after
-  ~110 s, while switching CS from B1 to B2; cause unknown.
+  ~110 s, while switching CS from B1 to B2 (16.11); cause unknown.
+
+For calibration: build the mobile node with `-DCONFIG_IL_RAW_OUTPUT=y -DCONFIG_IL_AUTO_LAYOUT=n`
+(prints `$RAW` and does not wait for the beacon layout), put it at known distances from one
+beacon, keep people and laptops away, and fit `IFFT_SLOPE` / `IFFT_OFFSET_M` to the raw IFFT.
 
 Multi-link scheduling notes (all subevents aborted, subevent abort reason `0x3`):
 - each beacon gets its own connection interval (40/45/50/55 ms for B1..B4), so the
