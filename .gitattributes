@@ -1,0 +1,4 @@
+# Files used on the Raspberry Pi / Linux: always LF, also in a Windows checkout
+*.service text eol=lf
+*.sh      text eol=lf
+*.py      text eol=lf
