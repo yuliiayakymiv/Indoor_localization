@@ -13,8 +13,11 @@ FILE(GLOB app_sources src/*.c src/*.cpp)
 # NORDIC SDK APP START
 target_sources(app PRIVATE
   ${app_sources}
-  # Sofia's trilateration (shared with the rest of the project, used as is)
+  # Position code shared with the rest of the project (portable C++, tested on a PC with
+  # ../../trilateration/test_tracker.cpp): Sofia's trilateration, the tracker, the laser height
   ${CMAKE_CURRENT_LIST_DIR}/../../trilateration/trilateration.cpp
+  ${CMAKE_CURRENT_LIST_DIR}/../../trilateration/tracker.cpp
+  ${CMAKE_CURRENT_LIST_DIR}/../../trilateration/height_fusion.cpp
 )
 target_include_directories(app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../trilateration)
 

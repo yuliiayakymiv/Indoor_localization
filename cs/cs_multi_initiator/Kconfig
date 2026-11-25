@@ -72,7 +72,8 @@ config IL_EXTERNAL_ANTENNA
 	help
 	  y: the XIAO RF switch (P2.05) selects the U.FL connector, the FPC antenna must be
 	  plugged in. n: the onboard ceramic antenna. See src/antenna.c.
-	  The distance calibration in src/main.c was fitted with onboard antennas.
+	  The distance calibration in src/main.c was re-fitted on 18.11.2026 with the external
+	  antennas; recalibrate after switching to the onboard one.
 
 config IL_SLEEP_BUTTON
 	bool "Sleep button on D0 (to GND): press to sleep, press again to wake up"
@@ -96,6 +97,80 @@ config IL_MAVLINK
 	  position, MAVLink v2, on uart21 (115200 baud). The text output stays on the console.
 	  Uses ../../mavlink/mavlink_packer.cpp and the lib/mavlink submodule
 	  (git submodule update --init lib/mavlink).
+
+config IL_DEFAULT_MODE_DRONE
+	bool "Mobile node starts in DRONE mode (3D) instead of CAR mode (2D)"
+	default n
+	help
+	  CAR: 2D, only IL_B1..IL_B3 are used (IL_B4 is ignored and not ranged), z is the
+	  antenna height of the car (IL_CAR_ANTENNA_Z_MM).
+	  DRONE: 3D with every beacon, z also from a laser rangefinder if there is one.
+	  The mode can be switched at run time with "$MODE,CAR" / "$MODE,DRONE" on the console
+	  (the map page does that, see tools/map).
+
+config IL_CAR_ANTENNA_Z_MM
+	int "Antenna height of the mobile node on the car, mm above the floor"
+	default 0
+
+config IL_BEACON_BASE_Z_MM
+	int "Antenna height of IL_B1..IL_B3 above the floor, mm (all three the same)"
+	default 0
+	help
+	  z of the position is measured from the floor, so the laser height of the drone can be
+	  compared with it. Put B1..B3 at the same height (e.g. on equal boxes) and enter it here.
+
+config IL_BEACON4_Z_MM
+	int "Antenna height of IL_B4 above the floor, mm (0 = compute from the distances)"
+	default 0
+	help
+	  0: z of IL_B4 is computed from its distances to IL_B1..IL_B3 (needs a height
+	  difference of at least ~1 m to be useful). A value measured with a tape is more precise.
+
+config IL_LAYOUT_CORRECTION_MM
+	int "Correction added to every beacon-to-beacon distance, mm"
+	default 290
+	range -1000 1000
+	help
+	  The beacons measure each other short: on 19.11.2026 the sides came out 2.20 / 2.16 /
+	  2.11 m for 2.50 / 2.38 / 2.46 m (on average 290 mm short), because the calibration was
+	  fitted on the mobile node <-> beacon link. Only used with IL_AUTO_LAYOUT. Set 0 to use
+	  the measured distances as they are.
+
+config IL_B4_LAYOUT_WAIT_S
+	int "Mobile node: how long to wait for the IL_B4 distances after the B1-B2-B3 triangle, s"
+	default 60
+	help
+	  The triangle B1-B2-B3 is enough to start. IL_B4 (only with IL_NUM_BEACONS=4) is used
+	  as soon as its distances arrive within this time; otherwise the node starts without it
+	  (CAR mode does not need it).
+
+config IL_SURVEY_OPTIONAL_S
+	int "Beacon: give up on an IL_B4 that is never found after this time, s"
+	default 90
+	help
+	  A beacon measures every beacon with a higher id at boot. IL_B4 is optional: if it is
+	  not found at all within this time (not switched on), the beacon stops looking for it
+	  and does not reboot to retry, so the 3-beacon system still starts quickly.
+
+config IL_COMMANDS
+	bool "Mobile node: text commands on the console ($MODE, $LSR)"
+	default y if IL_BEACON_ID = 0
+	depends on SERIAL
+	select UART_INTERRUPT_DRIVEN
+	select RING_BUFFER
+	help
+	  $MODE,CAR / $MODE,DRONE  switch the mode (the map page sends it);
+	  $LSR,<range_mm>,<roll_cdeg>,<pitch_cdeg>  one laser rangefinder sample (if the
+	  rangefinder is read by the Raspberry Pi; for tests). See src/il_cmd.c.
+
+config IL_LASER_FROM_FC
+	bool "Read the laser rangefinder and the attitude from the flight controller (MAVLink)"
+	default y
+	depends on IL_MAVLINK && IL_COMMANDS
+	help
+	  Parses DISTANCE_SENSOR (downward, orientation PITCH_270) and ATTITUDE from the flight
+	  controller on the MAVLink UART RX (pin D7). In ArduPilot: SERIALx_PROTOCOL = 2,
+	  stream rates SRx_EXTRA1 (ATTITUDE) and SRx_EXTRA3 (DISTANCE_SENSOR) at 10 Hz.
 
 config IL_SAMPLES_PER_TURN
 	int "CS distance estimates to collect from a beacon before switching to the next one"
