@@ -37,8 +37,22 @@ int main() {
     mavlink_vision_position_estimate_t v;
     mavlink_msg_vision_position_estimate_decode(&msg, &v);
     check(v.usec == 123456789ULL, "vision timestamp");
-    check(near(v.x, p.x) && near(v.y, p.y), "vision x, y");
+    check(near(v.x, p.x) && near(v.y, -p.y), "vision x, y (NED: y negated, right-handed)");
     check(near(v.z, -p.z), "vision z converted to NED (down)");
+
+    check(isnan(v.covariance[0]), "covariance unknown in the short form");
+    mavlink_heartbeat_t hb;
+    len = MavlinkPacker::pack_heartbeat(buf);
+    parse(buf, len, msg);
+    mavlink_msg_heartbeat_decode(&msg, &hb);
+    check(msg.compid == MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY && hb.autopilot == MAV_AUTOPILOT_INVALID,
+          "heartbeat of a companion sensor, not of a second autopilot");
+
+    len = MavlinkPacker::pack_vision_position(p, 1000ULL, 0.25f, 0.05f, buf);
+    check(len > 0 && parse(buf, len, msg), "vision estimate with covariance parses");
+    mavlink_msg_vision_position_estimate_decode(&msg, &v);
+    check(near(v.covariance[0], 0.0625f) && near(v.covariance[6], 0.0625f) &&
+          near(v.covariance[11], 0.0025f), "covariance x, y, z");
 
     len = MavlinkPacker::pack_local_position(p, 4242, buf);
     check(len > 0 && parse(buf, len, msg), "local position parses");
@@ -46,7 +60,7 @@ int main() {
     mavlink_local_position_ned_t l;
     mavlink_msg_local_position_ned_decode(&msg, &l);
     check(l.time_boot_ms == 4242, "local position timestamp");
-    check(near(l.x, p.x) && near(l.y, p.y) && near(l.z, -p.z), "local position x, y, z (NED)");
+    check(near(l.x, p.x) && near(l.y, -p.y) && near(l.z, -p.z), "local position x, y, z (NED)");
 
     printf("\n%s (%d failed)\n", failures ? "TESTS FAILED" : "ALL TESTS PASSED", failures);
     return failures ? 1 : 0;
