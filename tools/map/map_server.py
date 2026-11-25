@@ -12,7 +12,14 @@ What it reads from the serial output:
     E: Beacon layout: <reason>                          layout failed (also repeated)
     $RNG,<seq>,<t_ms>,<beacon>,<dist_mm>,<status>*<XX>       distance to one beacon
     $POS,<seq>,<t_ms>,<x_mm>,<y_mm>,<z_mm>,<status>*<XX>     position
-Lines with a wrong checksum are ignored. A "*** Booting" line (board restart) clears the map.
+    $MOD,<CAR|DRONE>,<beacons used>*<XX>                     current mode
+    $HGT,<t_ms>,<laser_h_mm>,<surface_mm>,<surface>,<z_mm>*<XX>   laser height (drone)
+    $OBS,<seq>,<t_ms>,<x_mm>,<y_mm>,<h_mm>*<XX>              obstacle under the drone
+Lines with a wrong checksum are ignored. A "*** Booting" line (board restart) clears the map
+(the obstacles are kept: they are a map of the room, not of one run).
+
+Mode (car / drone): the page has a switch; the server sends "$MODE,CAR" / "$MODE,DRONE" to
+the board and repeats it if the board restarts with another mode. CAR ignores the 4th beacon.
 
 Usage:
     pip install pyserial
@@ -44,6 +51,8 @@ BAUD = 115200
 TRAIL_LEN = 200
 
 POS_STATUS = {0: "ok", 1: "мало маяків", 2: "погана геометрія / розкладка"}
+SURFACE = {0: "невідомо", 1: "підлога", 2: "перешкода"}
+MAX_OBSTACLES = 2000
 RNG_STATUS = {0: "ok", 1: "немає оцінки", 2: "таймаут", 3: "не підключений"}
 
 RE_BEACON = re.compile(r"Beacon IL_B(\d+) at x=(-?\d+) y=(-?\d+) z=(-?\d+) mm")
@@ -59,6 +68,8 @@ class State:
     def __init__(self):
         self.lock = threading.Lock()
         self.clients = []          # one queue per open page
+        self.obstacles = []        # [{x, y, h, t}] in mm; kept across board restarts
+        self.desired_mode = None   # "car" / "drone" chosen on the page
         self.reset()
 
     def reset(self):
@@ -70,6 +81,9 @@ class State:
         self.ranges = {}           # id -> last $RNG
         self.source = ""
         self.last_line_time = None
+        self.mode = None           # mode reported by the board ($MOD): "car" / "drone"
+        self.mode_beacons = None   # beacons that mode uses
+        self.height = None         # last $HGT
 
     def snapshot(self):
         return {
@@ -81,6 +95,12 @@ class State:
             "trail": self.trail,
             "ranges": self.ranges,
             "source": self.source,
+            "mode": self.mode,
+            "mode_beacons": self.mode_beacons,
+            "desired_mode": self.desired_mode,
+            "height": self.height,
+            "obstacles": self.obstacles,
+            "can_send": SERIAL.connected() or DEMO_MODE[0] is not None,
             "server_time": time.time(),
         }
 
@@ -95,6 +115,59 @@ class State:
 
 
 STATE = State()
+
+
+class SerialOut:
+    """The open serial port of the board, for the $MODE command (written from HTTP threads)."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.ser = None
+        self.last_mode_sent = 0.0
+
+    def connected(self):
+        return self.ser is not None
+
+    def send(self, body):
+        cs = 0
+        for ch in body:
+            cs ^= ord(ch)
+        line = f"${body}*{cs:02X}\r\n".encode()
+        with self.lock:
+            if self.ser is None:
+                return False
+            try:
+                self.ser.write(line)
+                self.ser.flush()
+                return True
+            except Exception as e:  # unplugged
+                print(f"Serial write failed: {e}")
+                return False
+
+
+SERIAL = SerialOut()
+DEMO_MODE = [None]  # --demo: the mode of the simulated board
+
+
+def request_mode(mode):
+    """Page asked for a mode: remember it and send it to the board (or the demo)."""
+    with STATE.lock:
+        STATE.desired_mode = mode
+    STATE.publish({"type": "desired_mode", "mode": mode})
+    if DEMO_MODE[0] is not None:
+        DEMO_MODE[0] = mode
+        return True
+    SERIAL.last_mode_sent = time.time()
+    return SERIAL.send(f"MODE,{mode.upper()}")
+
+
+def resend_mode_if_needed():
+    """The board reports another mode than chosen (e.g. it restarted): ask again, every 3 s."""
+    with STATE.lock:
+        want, have = STATE.desired_mode, STATE.mode
+    if want and have and want != have and time.time() - SERIAL.last_mode_sent > 3:
+        SERIAL.last_mode_sent = time.time()
+        SERIAL.send(f"MODE,{want.upper()}")
 
 
 # --------------------------------------------------------------------------------------
@@ -186,6 +259,7 @@ def handle_line(line):
             STATE.reset()
             STATE.source = src
         STATE.publish({"type": "reset"})
+        SERIAL.last_mode_sent = 0.0  # the board restarted: send the chosen mode at its $MOD
         return
 
     # A log line can be glued in front of a message: take the last '$'
@@ -213,6 +287,33 @@ def handle_line(line):
                     STATE.ranges[str(rng["beacon"])] = rng
                 STATE.publish({"type": "rng", "rng": rng})
                 tcp_text("rng", rng)
+            elif f[0] == "MOD" and len(f) >= 2:
+                mode = f[1].lower()
+                used = int(f[2]) if len(f) >= 3 and f[2] else None
+                with STATE.lock:
+                    changed = STATE.mode != mode or STATE.mode_beacons != used
+                    STATE.mode, STATE.mode_beacons = mode, used
+                    if mode == "car":
+                        STATE.height = None
+                if changed:
+                    STATE.publish({"type": "mode", "mode": mode, "beacons": used})
+                    tcp_text("raw", line=f"MODE {mode.upper()}")
+                resend_mode_if_needed()
+            elif f[0] == "HGT" and len(f) >= 6:
+                hgt = {"t_ms": int(f[1]), "laser_h": int(f[2]), "surface_h": int(f[3]),
+                       "surface": int(f[4]), "surface_text": SURFACE.get(int(f[4]), "?"),
+                       "z": int(f[5]), "rx": time.time()}
+                with STATE.lock:
+                    STATE.height = hgt
+                STATE.publish({"type": "height", "height": hgt})
+            elif f[0] == "OBS" and len(f) >= 6:
+                obs = {"x": int(f[3]), "y": int(f[4]), "h": int(f[5]), "t": time.time()}
+                with STATE.lock:
+                    STATE.obstacles.append(obs)
+                    del STATE.obstacles[:-MAX_OBSTACLES]
+                STATE.publish({"type": "obstacle", "obstacle": obs})
+                tcp_text("raw", line=f"OBSTACLE h={obs['h'] / 1000:.2f} m at "
+                                     f"x={obs['x'] / 1000:.2f} y={obs['y'] / 1000:.2f}")
             elif f[0] == "BCN" and len(f) >= 5:
                 bid = str(int(f[1]))
                 beacon = {"x": int(f[2]), "y": int(f[3]), "z": int(f[4])}
@@ -278,6 +379,9 @@ def run_serial(port):
         try:
             with serial.Serial(port, BAUD, timeout=1) as ser:
                 print(f"Reading {port} at {BAUD} baud")
+                with SERIAL.lock:
+                    SERIAL.ser = ser
+                SERIAL.last_mode_sent = 0.0  # a (re)opened port: send the chosen mode again
                 buf = b""
                 while True:
                     chunk = ser.read(ser.in_waiting or 1)
@@ -288,6 +392,8 @@ def run_serial(port):
                         raw, buf = buf.split(b"\n", 1)
                         handle_line(raw.decode("utf-8", errors="replace"))
         except Exception as e:  # unplugged board, port busy, ...
+            with SERIAL.lock:
+                SERIAL.ser = None
             print(f"Serial port {port}: {e}. Retrying in 2 s")
             STATE.publish({"type": "error", "text": f"{port}: {e}"})
             time.sleep(2)
@@ -300,7 +406,7 @@ def run_replay(path, speed):
             lines = fh.read().splitlines()
         last_t = None
         for line in lines:
-            m = re.match(r"\$(POS|RNG),\d+,(\d+),", line)
+            m = re.match(r"\$(POS|RNG|OBS),\d+,(\d+),", line)
             if m and speed > 0:
                 t = int(m.group(2)) / 1000.0
                 if last_t is not None and 0 < t - last_t < 10:
@@ -313,6 +419,7 @@ def run_replay(path, speed):
 
 
 def run_demo():
+    """Made-up board: 4 beacons (B4 high), CAR / DRONE switch, laser height and a box."""
     STATE.source = "demo"
 
     def nmea(body):
@@ -321,26 +428,49 @@ def run_demo():
             cs ^= ord(ch)
         return f"${body}*{cs:02X}"
 
-    beacons = {1: (0, 0), 2: (2500, 0), 3: (1478, 1575)}
-    for bid, (x, y) in beacons.items():
-        handle_line(f"I: Beacon IL_B{bid} at x={x} y={y} z=0 mm")
-    seq = pos_seq = 0
+    beacons = {1: (0, 0, 300), 2: (2500, 0, 300), 3: (1478, 1575, 300), 4: (1250, 600, 2300)}
+    box = (900, 300, 1500, 800, 700)  # x0, y0, x1, y1, height (mm)
+    for bid, (x, y, z) in beacons.items():
+        handle_line(f"I: Beacon IL_B{bid} at x={x} y={y} z={z} mm")
+    seq = pos_seq = obs_seq = 0
     t0 = time.time()
+    mode_reported = None
     while True:
+        mode = DEMO_MODE[0]
+        if mode != mode_reported:
+            used = 3 if mode == "car" else 4
+            handle_line(nmea(f"MOD,{mode.upper()},{used}"))
+            mode_reported = mode
         t = time.time() - t0
         x = 1300 + 700 * math.cos(t / 6)
         y = 700 + 450 * math.sin(t / 4)
-        for bid, (bx, by) in beacons.items():
-            if random.random() < 0.15:
+        z = 100 if mode == "car" else 1200 + 200 * math.sin(t / 5)
+        ids = [1, 2, 3] if mode == "car" else [1, 2, 3, 4]
+        for bid in ids:
+            bx, by, bz = beacons[bid]
+            if random.random() < 0.1:
                 handle_line(nmea(f"RNG,{seq},{int(t * 1000)},{bid},-1,2"))
             else:
-                d = math.hypot(x - bx, y - by) + random.gauss(0, 60)
+                d = math.dist((x, y, z), (bx, by, bz)) + random.gauss(0, 60)
                 handle_line(nmea(f"RNG,{seq},{int(t * 1000)},{bid},{int(d)},0"))
             seq += 1
-            time.sleep(0.4)
-        jx, jy = random.gauss(0, 50), random.gauss(0, 50)
-        handle_line(nmea(f"POS,{pos_seq},{int(t * 1000)},{int(x + jx)},{int(y + jy)},0,0"))
-        pos_seq += 1
+            jx, jy = random.gauss(0, 50), random.gauss(0, 50)
+            jz = 0 if mode == "car" else random.gauss(0, 20)
+            handle_line(nmea(f"POS,{pos_seq},{int(t * 1000)},{int(x + jx)},{int(y + jy)},"
+                             f"{int(z + jz)},0"))
+            pos_seq += 1
+            if mode == "drone":
+                over = box[0] < x < box[2] and box[1] < y < box[3]
+                below = box[4] if over else 0
+                laser = z - below + random.gauss(0, 10)
+                surface = 2 if over else 1
+                handle_line(nmea(f"HGT,{int(t * 1000)},{int(laser)},{int(z - laser)},"
+                                 f"{surface},{int(z)}"))
+                if over:
+                    handle_line(nmea(f"OBS,{obs_seq},{int(t * 1000)},{int(x)},{int(y)},"
+                                     f"{int(below + random.gauss(0, 20))}"))
+                    obs_seq += 1
+            time.sleep(0.5)
 
 
 # --------------------------------------------------------------------------------------
@@ -373,6 +503,35 @@ class Handler(BaseHTTPRequestHandler):
             self.events()
         else:
             self.send_error(404)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            body = {}
+        if self.path == "/mode":
+            mode = str(body.get("mode", "")).lower()
+            if mode not in ("car", "drone"):
+                self.send_error(400, "mode must be car or drone")
+                return
+            sent = request_mode(mode)
+            self.reply_json({"ok": True, "sent": sent})
+        elif self.path == "/obstacles/clear":
+            with STATE.lock:
+                STATE.obstacles = []
+            STATE.publish({"type": "obstacles_cleared"})
+            self.reply_json({"ok": True})
+        else:
+            self.send_error(404)
+
+    def reply_json(self, obj):
+        data = json.dumps(obj).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def events(self):
         q = queue.Queue(maxsize=500)
@@ -447,6 +606,8 @@ def main():
         TCP = TcpText(args.tcp)
 
     if args.demo:
+        DEMO_MODE[0] = "car"
+        STATE.desired_mode = "car"
         target, targs = run_demo, ()
     elif args.replay:
         target, targs = run_replay, (args.replay, args.speed)

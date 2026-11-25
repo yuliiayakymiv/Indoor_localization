@@ -9,14 +9,14 @@
     --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --line: #dfe3ea;
     --grid: #eceff4; --axis: #b9c0cc; --beacon: #3b6fd8; --pos: #1f9d55; --pos-old: #9aa3b2;
     --trail: rgba(31, 157, 85, .35); --range: rgba(59, 111, 216, .22); --warn-bg: #fff4e0;
-    --warn: #8a5a00; --bad: #c0392b;
+    --warn: #8a5a00; --bad: #c0392b; --obstacle: #d9822b; --accent: #3b6fd8;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #12151b; --panel: #1b2029; --text: #e6e9ef; --muted: #8e97a8; --line: #2b3240;
       --grid: #1f2530; --axis: #3a4354; --beacon: #6f9bff; --pos: #3ccf7a; --pos-old: #5c6577;
       --trail: rgba(60, 207, 122, .35); --range: rgba(111, 155, 255, .25); --warn-bg: #3a2e14;
-      --warn: #f0c36a; --bad: #ff7b6b;
+      --warn: #f0c36a; --bad: #ff7b6b; --obstacle: #f0a050; --accent: #6f9bff;
     }
   }
   * { box-sizing: border-box; }
@@ -50,6 +50,15 @@
   label { display: flex; gap: 8px; align-items: center; margin: 6px 0; font-size: 14px; }
   button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line);
     background: var(--bg); color: var(--text); cursor: pointer; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; padding: 6px 14px; background: var(--panel); }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.on { background: var(--accent); color: #fff; font-weight: 600; }
+  .seg button.pending { background: color-mix(in srgb, var(--accent) 35%, var(--panel)); }
+  .seg button:disabled { opacity: .5; cursor: default; }
+  td.off { color: var(--muted); }
+  .drone-only { display: none; }
+  body.drone .drone-only { display: block; }
   @media (max-width: 760px) {
     main { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
     aside { border-left: 0; border-top: 1px solid var(--line); max-height: 38vh; }
@@ -60,6 +69,9 @@
 <div class="app">
   <header>
     <span class="title">Indoor localization</span>
+    <span class="seg" id="modeSeg" title="CAR: 2D, маяки B1-B3 (4-й ігнорується). DRONE: 3D, усі маяки + лазер.">
+      <button data-mode="car">Машинка</button><button data-mode="drone">Дрон</button>
+    </span>
     <span id="live" class="pill">немає з'єднання</span>
     <span class="xy" id="xy">X —  Y —</span>
     <span class="muted" id="posinfo"></span>
@@ -73,10 +85,16 @@
     <aside>
       <h2>Маяки</h2>
       <table id="beacons"><tbody></tbody></table>
+      <div class="drone-only">
+        <h2>Висота (лазер)</h2>
+        <table id="height"><tbody></tbody></table>
+      </div>
       <h2>Показувати</h2>
       <label><input type="checkbox" id="showRanges" checked> кола відстаней</label>
       <label><input type="checkbox" id="showTrail" checked> слід</label>
-      <p><button id="clearTrail">Очистити слід</button></p>
+      <label><input type="checkbox" id="showObstacles" checked> <span>перешкоди (<span id="obsCount">0</span>)</span></label>
+      <p><button id="clearTrail">Очистити слід</button>
+         <button id="clearObstacles">Очистити перешкоди</button></p>
       <p class="muted" id="layoutinfo"></p>
     </aside>
   </main>
@@ -84,7 +102,10 @@
 <script>
 (() => {
   const S = { beacons: {}, pos: null, trail: [], ranges: {}, layout_error: null,
-              layout_info: null, source: "", lastMsg: 0 };
+              layout_info: null, source: "", lastMsg: 0, mode: null, desired_mode: null,
+              mode_beacons: null, height: null, obstacles: [], can_send: false,
+              pendingMode: null, pendingSince: 0 };
+  const CAR_BEACONS = 3; // CAR mode uses B1..B3, the 4th beacon is ignored
   const cv = document.getElementById("map"), ctx = cv.getContext("2d");
   const $ = id => document.getElementById(id);
   const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -95,12 +116,14 @@
       const p = JSON.parse(localStorage.getItem("ilmap") || "{}");
       if ("ranges" in p) $("showRanges").checked = p.ranges;
       if ("trail" in p) $("showTrail").checked = p.trail;
+      if ("obstacles" in p) $("showObstacles").checked = p.obstacles;
     } catch (e) { /* storage blocked: keep defaults */ }
   }
   function prefsSave() {
     try {
       localStorage.setItem("ilmap", JSON.stringify(
-        { ranges: $("showRanges").checked, trail: $("showTrail").checked }));
+        { ranges: $("showRanges").checked, trail: $("showTrail").checked,
+          obstacles: $("showObstacles").checked }));
     } catch (e) { /* ignore */ }
   }
 
@@ -111,14 +134,25 @@
       case "snapshot":
         Object.assign(S, { beacons: m.beacons || {}, pos: m.pos, trail: m.trail || [],
           ranges: m.ranges || {}, layout_error: m.layout_error, layout_info: m.layout_info,
-          source: m.source || "" });
+          source: m.source || "", mode: m.mode, desired_mode: m.desired_mode,
+          mode_beacons: m.mode_beacons, height: m.height, obstacles: m.obstacles || [],
+          can_send: !!m.can_send });
         // age of the last position by the server's clock (tablet and laptop clocks differ)
         if (S.pos && m.server_time) S.pos.rxLocal = Date.now() - (m.server_time - S.pos.rx) * 1000;
         break;
       case "reset":
         Object.assign(S, { beacons: {}, pos: null, trail: [], ranges: {},
-          layout_error: null, layout_info: null });
+          layout_error: null, layout_info: null, mode: null, height: null });
         break;
+      case "mode":
+        S.mode = m.mode; S.mode_beacons = m.beacons;
+        if (S.pendingMode === m.mode) S.pendingMode = null;
+        if (m.mode === "car") S.height = null;
+        break;
+      case "desired_mode": S.desired_mode = m.mode; break;
+      case "height": S.height = m.height; break;
+      case "obstacle": S.obstacles.push(m.obstacle); S.obstacles = S.obstacles.slice(-2000); break;
+      case "obstacles_cleared": S.obstacles = []; break;
       case "beacon": S.beacons[m.id] = m.beacon; S.layout_error = null; break;
       case "layout_error": S.layout_error = m.text; break;
       case "layout_info": S.layout_info = m.text; break;
@@ -134,6 +168,23 @@
     draw();
   }
 
+  // mode the map shows: what the board reports, else what was chosen
+  const curMode = () => S.mode || S.desired_mode || "car";
+  const beaconUsed = id => curMode() === "drone" || Number(id) <= CAR_BEACONS;
+
+  async function setMode(mode) {
+    S.pendingMode = mode; S.pendingSince = Date.now(); S.desired_mode = mode;
+    renderPanel();
+    try {
+      const r = await fetch("mode", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }) });
+      const j = await r.json();
+      if (!j.sent) S.modeError = "плата не підключена: режим увімкнеться, коли вона з'явиться";
+      else S.modeError = null;
+    } catch (e) { S.modeError = "сервер не відповів"; }
+    renderPanel();
+  }
+
   function connect() {
     const es = new EventSource("events");
     es.onmessage = e => { try { apply(JSON.parse(e.data)); } catch (err) { console.error(err); } };
@@ -147,18 +198,45 @@
     const rows = [...ids].sort().map(id => {
       const r = S.ranges[id];
       let v = "—", cls = "";
-      if (r) {
+      if (!beaconUsed(id)) { v = "ігнорується (машинка)"; cls = "off"; }
+      else if (r) {
         if (r.status === 0) v = fmtM(r.dist) + " м";
         else { v = r.status_text; cls = "bad"; }
       }
-      return `<tr><td>B${id}</td><td class="${cls}">${v}</td></tr>`;
+      const b = S.beacons[id];
+      const zt = b && curMode() === "drone" ? ` <span class="muted">z ${fmtM(b.z)}</span>` : "";
+      return `<tr><td class="${beaconUsed(id) ? "" : "off"}">B${id}${zt}</td><td class="${cls}">${v}</td></tr>`;
     });
     $("beacons").tBodies[0].innerHTML = rows.join("") ||
       `<tr><td class="muted">ще немає даних</td><td></td></tr>`;
 
+    // mode switch
+    const mode = curMode();
+    document.body.classList.toggle("drone", mode === "drone");
+    for (const btn of $("modeSeg").querySelectorAll("button")) {
+      const m = btn.dataset.mode;
+      btn.classList.toggle("on", S.mode ? S.mode === m : S.desired_mode === m);
+      btn.classList.toggle("pending", S.pendingMode === m);
+    }
+    const hs = $("height").tBodies[0];
+    const h = S.height;
+    if (h) {
+      const age = (Date.now() / 1000 - h.rx);
+      hs.innerHTML = `<tr><td>до поверхні</td><td>${fmtM(h.laser_h)} м</td></tr>` +
+        `<tr><td>під дроном</td><td class="${h.surface === 2 ? "bad" : ""}">${h.surface_text}` +
+        (h.surface === 2 ? ` ${fmtM(h.surface_h)} м` : "") + `</td></tr>` +
+        `<tr><td>Z (BLE + лазер)</td><td>${fmtM(h.z)} м</td></tr>` +
+        (age > 3 ? `<tr><td class="muted" colspan="2">немає даних ${Math.round(age)} с</td></tr>` : "");
+    } else {
+      hs.innerHTML = `<tr><td class="muted">лазер ще не надсилав даних</td><td></td></tr>`;
+    }
+    $("obsCount").textContent = S.obstacles.length;
+
     const p = S.pos;
     if (p && p.status === 0) {
-      $("xy").textContent = `X ${fmtM(p.x)}  Y ${fmtM(p.y)} м`;
+      $("xy").textContent = mode === "drone"
+        ? `X ${fmtM(p.x)}  Y ${fmtM(p.y)}  Z ${fmtM(p.z)} м`
+        : `X ${fmtM(p.x)}  Y ${fmtM(p.y)} м`;
       $("posinfo").textContent = `#${p.seq}`;
     } else if (p) {
       $("posinfo").textContent = `#${p.seq}: ${p.status_text}`;
@@ -169,6 +247,12 @@
     if (S.layout_error) msg = "Розкладка маяків не побудована: " + S.layout_error +
       ". Позиції не буде, поки маяки не переміряють одне одного.";
     else if (!Object.keys(S.beacons).length) msg = "Чекаю координати маяків (вони друкуються на старті мобільного вузла).";
+    else if (S.pendingMode && Date.now() - S.pendingSince > 6000)
+      msg = "Плата не підтвердила режим «" + (S.pendingMode === "drone" ? "дрон" : "машинка") +
+        "» (стара прошивка або плата не підключена). Сервер повторить, коли вона відповість.";
+    else if (S.modeError) msg = "Режим: " + S.modeError;
+    else if (mode === "drone" && S.mode === "drone" && S.mode_beacons !== null && S.mode_beacons < 4)
+      msg = "Режим дрона з " + S.mode_beacons + " маяками: висота лише з лазера (4-го маяка немає).";
     b.textContent = msg; b.style.display = msg ? "block" : "none";
   }
 
@@ -229,10 +313,14 @@
     // range circles (last OK distance of each beacon)
     if ($("showRanges").checked) {
       ctx.strokeStyle = css("--range"); ctx.lineWidth = 2;
+      const pz = S.pos && S.pos.status === 0 ? S.pos.z : 0;
       for (const [id, r] of Object.entries(S.ranges)) {
         const b = S.beacons[id];
-        if (!b || r.status !== 0) continue;
-        ctx.beginPath(); ctx.arc(X(b.x), Y(b.y), r.dist * view.scale, 0, 2 * Math.PI); ctx.stroke();
+        if (!b || r.status !== 0 || !beaconUsed(id)) continue;
+        // the distance is 3D: draw its projection on the floor at the current height
+        const dz = pz - (b.z || 0);
+        const rr = Math.sqrt(Math.max(r.dist * r.dist - dz * dz, 0));
+        ctx.beginPath(); ctx.arc(X(b.x), Y(b.y), rr * view.scale, 0, 2 * Math.PI); ctx.stroke();
       }
     }
 
@@ -243,15 +331,35 @@
       ctx.stroke();
     }
 
+    // obstacles found by the laser (drone): squares with their height
+    if ($("showObstacles").checked && S.obstacles.length) {
+      ctx.font = "11px system-ui, sans-serif";
+      const labelled = [];
+      for (const o of S.obstacles) {
+        const px = X(o.x), py = Y(o.y);
+        ctx.fillStyle = css("--obstacle"); ctx.globalAlpha = .55;
+        ctx.fillRect(px - 5, py - 5, 10, 10);
+        ctx.globalAlpha = 1;
+        // one label per ~40 px, not for every sample
+        if (!labelled.some(q => Math.hypot(q[0] - px, q[1] - py) < 40)) {
+          labelled.push([px, py]);
+          ctx.fillStyle = css("--text");
+          ctx.fillText(fmtM(o.h) + " м", px + 7, py - 6);
+        }
+      }
+    }
+
     // beacons
     ctx.font = "600 13px system-ui, sans-serif";
     for (const [id, b] of Object.entries(S.beacons)) {
       const px = X(b.x), py = Y(b.y);
+      ctx.globalAlpha = beaconUsed(id) ? 1 : .3;
       ctx.fillStyle = css("--beacon");
       ctx.beginPath(); ctx.moveTo(px, py - 10); ctx.lineTo(px + 9, py + 7); ctx.lineTo(px - 9, py + 7);
       ctx.closePath(); ctx.fill();
       ctx.fillStyle = css("--text");
-      ctx.fillText("B" + id, px + 12, py + 4);
+      ctx.fillText("B" + id + (beaconUsed(id) ? "" : " (ігнор.)"), px + 12, py + 4);
+      ctx.globalAlpha = 1;
     }
 
     // current position
@@ -274,6 +382,15 @@
   $("showRanges").onchange = () => { prefsSave(); draw(); };
   $("showTrail").onchange = () => { prefsSave(); draw(); };
   $("clearTrail").onclick = () => { S.trail = []; draw(); };
+  $("showObstacles").onchange = () => { prefsSave(); draw(); };
+  $("clearObstacles").onclick = async () => {
+    if (!confirm("Видалити всі знайдені перешкоди з карти?")) return;
+    try { await fetch("obstacles/clear", { method: "POST" }); } catch (e) { /* offline */ }
+    S.obstacles = []; renderPanel(); draw();
+  };
+  for (const btn of $("modeSeg").querySelectorAll("button")) {
+    btn.onclick = () => { if (btn.dataset.mode !== curMode() || S.pendingMode) setMode(btn.dataset.mode); };
+  }
   window.addEventListener("resize", draw);
   prefsLoad();
   renderPanel();
